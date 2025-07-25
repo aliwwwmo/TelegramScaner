@@ -5,15 +5,15 @@ import re
 from datetime import datetime
 from typing import List, Dict, Set, Optional
 from urllib.parse import urlparse, parse_qs, unquote
-import aiohttp
 
 from pyrogram import Client
-from pyrogram.types import Chat, Message, User
+from pyrogram.types import Chat, Message, User, ChatPreview
 from pyrogram.errors import (
     ChannelPrivate, ChatAdminRequired, FloodWait, 
     UsernameNotOccupied, PeerIdInvalid, InviteHashExpired,
     InviteHashInvalid, UserAlreadyParticipant
 )
+from pyrogram import raw
 from dotenv import load_dotenv
 import logging
 
@@ -183,8 +183,8 @@ class TelegramAnalyzer:
         
         return cleaned_links
 
-    async def analyze_invite_link(self, invite_hash: str, original_link: str) -> Dict:
-        """تحلیل لینک‌های دعوت (joinchat)"""
+    async def analyze_invite_link_advanced(self, invite_hash: str, original_link: str) -> Dict:
+        """تحلیل پیشرفته لینک‌های دعوت با استفاده از raw API"""
         result = {
             "link": original_link,
             "type": "invite_link",
@@ -195,30 +195,72 @@ class TelegramAnalyzer:
             "chat_id": None,
             "error": None,
             "invite_hash": invite_hash,
-            "can_join": False
+            "can_join": False,
+            "is_channel": False,
+            "is_group": False,
+            "is_public": False
         }
         
         try:
-            # دریافت اطلاعات لینک دعوت بدون join شدن
-            chat_invite = await self.app.get_chat_invite_link_info(invite_hash)
+            # استفاده از raw API برای چک کردن invite link
+            r = await self.app.invoke(
+                raw.functions.messages.CheckChatInvite(
+                    hash=invite_hash
+                )
+            )
             
-            if hasattr(chat_invite, 'chat'):
-                chat = chat_invite.chat
+            if isinstance(r, raw.types.ChatInviteAlready):
+                # اگر قبلاً عضو شده‌اید یا چت public است
+                chat = r.chat
+                result["chat_id"] = getattr(chat, 'id', None)
                 result["title"] = getattr(chat, 'title', '')
                 result["username"] = getattr(chat, 'username', '')
-                result["members_count"] = getattr(chat, 'members_count', 0)
-                result["chat_id"] = getattr(chat, 'id', None)
-                
-                if hasattr(chat, 'type'):
-                    if chat.type.name == "CHANNEL":
-                        result["type"] = "channel_invite"
-                    elif chat.type.name in ["GROUP", "SUPERGROUP"]:
-                        result["type"] = "group_invite"
-                
+                result["members_count"] = getattr(chat, 'participants_count', 0)
                 result["status"] = "accessible"
                 result["can_join"] = True
+                result["is_public"] = True
+                
+                # تشخیص نوع چت
+                if isinstance(chat, raw.types.Channel):
+                    if getattr(chat, 'broadcast', False):
+                        result["type"] = "channel_invite"
+                        result["is_channel"] = True
+                    else:
+                        result["type"] = "group_invite" 
+                        result["is_group"] = True
+                elif isinstance(chat, raw.types.Chat):
+                    result["type"] = "group_invite"
+                    result["is_group"] = True
+                
+                # برای چت‌های public، سعی کنیم chat_id را منفی کنیم
+                if result["chat_id"] and isinstance(chat, raw.types.Channel):
+                    result["chat_id"] = int(f"-100{chat.id}")
+                elif result["chat_id"] and isinstance(chat, raw.types.Chat):
+                    result["chat_id"] = -chat.id
+                    
+            elif isinstance(r, raw.types.ChatInvite):
+                # چت private است اما اطلاعات محدودی در دسترس است
+                result["title"] = getattr(r, 'title', '')
+                result["members_count"] = getattr(r, 'participants_count', 0)
+                result["status"] = "private"
+                result["can_join"] = True
+                result["is_public"] = False
+                
+                # تشخیص نوع
+                if getattr(r, 'channel', False):
+                    if getattr(r, 'broadcast', False):
+                        result["type"] = "channel_invite"
+                        result["is_channel"] = True
+                    else:
+                        result["type"] = "group_invite"
+                        result["is_group"] = True
+                else:
+                    result["type"] = "group_invite"
+                    result["is_group"] = True
+                    
             else:
-                result["error"] = "Could not get chat info from invite link"
+                result["error"] = f"Unexpected response type: {type(r)}"
+                result["status"] = "error"
                 
         except InviteHashExpired:
             result["error"] = "Invite link has expired"
@@ -243,7 +285,10 @@ class TelegramAnalyzer:
             "username": username,
             "members_count": 0,
             "chat_id": None,
-            "error": None
+            "error": None,
+            "is_channel": False,
+            "is_group": False,
+            "is_public": True
         }
         
         try:
@@ -256,8 +301,10 @@ class TelegramAnalyzer:
             
             if chat.type.name == "CHANNEL":
                 result["type"] = "channel"
+                result["is_channel"] = True
             elif chat.type.name in ["GROUP", "SUPERGROUP"]:
                 result["type"] = "group"
+                result["is_group"] = True
             elif chat.type.name == "PRIVATE":
                 result["type"] = "private"
             
@@ -266,6 +313,7 @@ class TelegramAnalyzer:
         except ChannelPrivate:
             result["status"] = "private"
             result["error"] = "Channel/Group is private"
+            result["is_public"] = False
         except (UsernameNotOccupied, PeerIdInvalid):
             result["error"] = "Invalid username or link"
             result["status"] = "invalid"
@@ -292,12 +340,15 @@ class TelegramAnalyzer:
                 "members_count": 0,
                 "chat_id": None,
                 "error": "Invalid or non-Telegram link",
-                "link_category": "invalid"
+                "link_category": "invalid",
+                "is_channel": False,
+                "is_group": False,
+                "is_public": False
             }
         
         # تحلیل بر اساس نوع لینک
         if link_info["is_invite_link"]:
-            result = await self.analyze_invite_link(link_info["identifier"], chat_link)
+            result = await self.analyze_invite_link_advanced(link_info["identifier"], chat_link)
         else:
             result = await self.analyze_public_link(link_info["identifier"], chat_link)
         
@@ -486,10 +537,11 @@ class TelegramAnalyzer:
                 "analysis_date": datetime.utcnow().isoformat()
             },
             "chat_types": {
-                "channels": len([c for c in self.chat_analysis_results if "channel" in c.get("type", "")]),
-                "groups": len([c for c in self.chat_analysis_results if "group" in c.get("type", "")]),
+                "channels": len([c for c in self.chat_analysis_results if c.get("is_channel", False)]),
+                "groups": len([c for c in self.chat_analysis_results if c.get("is_group", False)]),
                 "invite_links": len([c for c in self.chat_analysis_results if c.get("link_category") == "invite_link"]),
                 "public_links": len([c for c in self.chat_analysis_results if c.get("link_category") == "public_link"]),
+                "public_chats": len([c for c in self.chat_analysis_results if c.get("is_public", False)]),
                 "unknown": len([c for c in self.chat_analysis_results if c.get("type") == "unknown"])
             },
             "link_categories": categories,
@@ -571,106 +623,50 @@ class TelegramAnalyzer:
             logger.info("✅ Analysis completed successfully!")
 
 def main():
-    print("🎯 Telegram Channel/Group Analyzer v3.0")
-    print("🔗 Support for Redirect Links & Invite Links")
-    print("=" * 60)
+    """تابع اصلی"""
+    # خواندن لینک‌ها از فایل
+    links_file = os.getenv('LINKS_FILE', 'links.txt')
+    messages_per_chat = int(os.getenv('MESSAGES_PER_CHAT', '1000'))
     
-    # بررسی وجود فایل .env
-    if not os.path.exists('.env'):
-        print("❌ .env file not found!")
-        print("Please create a .env file with your configuration.")
-        return
-    
-    # بررسی متغیرهای محیطی ضروری
-    required_vars = ['API_ID', 'API_HASH']
-    missing_vars = [var for var in required_vars if not os.getenv(var)]
-    
-    if missing_vars:
-        print(f"❌ Missing required environment variables: {', '.join(missing_vars)}")
+    if not os.path.exists(links_file):
+        logger.error(f"❌ Links file not found: {links_file}")
+        print("Creating sample links.txt file...")
+        with open(links_file, 'w', encoding='utf-8') as f:
+            f.write("# Add your Telegram links here, one per line\n")
+            f.write("# Examples:\n")
+            f.write("# https://t.me/joinchat/abc123\n")
+            f.write("# https://t.me/channelname\n")
+            f.write("# @username\n")
+        print(f"✅ Created {links_file}. Please add your links and run again.")
         return
     
     # خواندن لینک‌ها
-    links_file = "links.txt"
-    
-    if os.path.exists(links_file):
-        with open(links_file, "r", encoding="utf-8") as f:
-            chat_links = [line.strip() for line in f if line.strip() and not line.startswith("#")]
-    else:
-        # ایجاد فایل نمونه
-        sample_links = [
-            "# Add your Telegram links here (one per line)",
-            "# Supports:",
-            "# - Public channels: https://t.me/python",
-            "# - Invite links: https://t.me/joinchat/xxxxx",
-            "# - Redirect links: https://translate.google.com/translate?u=https://t.me/...",
-            "# - Username format: @channel_username",
-            "",
-            "https://t.me/python",
-            "https://t.me/telegram"
-        ]
-        
-        with open(links_file, "w", encoding="utf-8") as f:
-            for link in sample_links:
-                f.write(f"{link}\n")
-        
-        print(f"📁 Sample file '{links_file}' created.")
-        print("Please add your Telegram links to this file and run the program again.")
-        return
-    
-    if not chat_links:
-        print("❌ No links found in links.txt!")
-        return
-    
-    print(f"📋 Found {len(chat_links)} links to analyze")
-    
-    # نمایش انواع لینک‌های شناسایی شده
-    redirect_count = len([l for l in chat_links if 'translate.google.com' in l or any(redirect in l for redirect in ['redirect', 'shortlink'])])
-    invite_count = len([l for l in chat_links if '/joinchat/' in l or '/+' in l])
-    public_count = len(chat_links) - redirect_count - invite_count
-    
-    print(f"   • Public links: {public_count}")
-    print(f"   • Invite links: {invite_count}")
-    print(f"   • Redirect links: {redirect_count}")
-    
-    # تنظیمات
+    chat_links = []
     try:
-        messages_limit = int(input("Enter messages limit per chat (default 1000): ").strip() or "1000")
-    except ValueError:
-        messages_limit = 1000
-    
-    # تایید از کاربر
-    print(f"\n📊 Analysis Settings:")
-    print(f"   • Total links: {len(chat_links)}")
-    print(f"   • Messages per chat: {messages_limit}")
-    print(f"   • Output file: {os.getenv('OUTPUT_FILE', 'my_chats.json')}")
-    print(f"   • Will NOT join any groups/channels")
-    
-    response = input("\nDo you want to continue? (y/n): ").strip().lower()
-    if response != 'y':
-        print("❌ Operation cancelled.")
+        with open(links_file, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    chat_links.append(line)
+        
+        if not chat_links:
+            logger.error("❌ No valid links found in links.txt")
+            return
+            
+        logger.info(f"📋 Loaded {len(chat_links)} links from {links_file}")
+        
+    except Exception as e:
+        logger.error(f"❌ Error reading links file: {e}")
         return
     
     # اجرای تحلیل
     analyzer = TelegramAnalyzer()
     try:
-        asyncio.run(analyzer.run_analysis(chat_links, messages_limit))
-        
-        print("\n🎉 Analysis completed successfully!")
-        print(f"📁 Results saved in:")
-        print(f"   • {analyzer.output_file} (Main summary)")
-        print(f"   • results/chat_analysis.json (Detailed chat analysis)")
-        print(f"   • results/extracted_links.txt (Extracted links)")
-        print(f"   • results/analysis_summary.json (Full summary)")
-        print(f"   • users/ directory (Individual user files)")
-        
+        asyncio.run(analyzer.run_analysis(chat_links, messages_per_chat))
     except KeyboardInterrupt:
-        print("\n⏹️ Analysis stopped by user")
-        # ذخیره نتایج جزئی
-        analyzer.save_results_to_files()
-        print("💾 Partial results saved.")
+        logger.info("⏹️ Analysis interrupted by user")
     except Exception as e:
-        print(f"\n❌ Error occurred: {e}")
-        logger.exception("Full error details:")
+        logger.error(f"❌ Analysis failed: {e}")
 
 if __name__ == "__main__":
     main()
