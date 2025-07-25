@@ -29,3 +29,30 @@ class TelegramAnalyzer:
         self.api_hash = api_hash
         self.app = Client("telegram_analyzer", api_id=api_id, api_hash=api_hash)
         
+ # ایجاد فولدرها
+        os.makedirs("results", exist_ok=True)
+        os.makedirs("users", exist_ok=True)
+        
+        # مجموعه‌های نگهداری داده
+        self.processed_users: Dict[int, Dict] = {}
+        self.extracted_links: Set[str] = set()
+
+    def extract_links_from_text(self, text: str) -> List[str]:
+        """استخراج لینک‌ها از متن"""
+        if not text:
+            return []
+            
+        # الگوهای مختلف لینک
+        patterns = [
+            r'https?://[^\s]+',
+            r'www\.[^\s]+',
+            r't\.me/[^\s]+',
+            r'@\w+',
+        ]
+        
+        links = []
+        for pattern in patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            links.extend(matches)
+        
+        return links
