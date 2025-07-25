@@ -4,6 +4,7 @@ import os
 from datetime import datetime
 from typing import List, Dict, Any
 from services.telegram_client import TelegramClientManager
+from services.user_tracker import UserTracker
 from config.settings import TelegramConfig, AnalysisConfig
 from utils.logger import logger
 
@@ -14,6 +15,7 @@ class TelegramAnalyzer:
         self.telegram_config = telegram_config
         self.analysis_config = analysis_config
         self.results = []
+        self.user_tracker = UserTracker()
     
     async def run_analysis(self, chat_links: List[str]):
         """اجرای تحلیل روی لیست چت‌ها"""
@@ -41,7 +43,11 @@ class TelegramAnalyzer:
                     
                     logger.info(f"📥 Retrieved {len(messages)} messages")
                     
-                    # تحلیل داده‌ها
+                    # پردازش پیام‌ها برای ردیابی کاربران
+                    logger.info(f"👥 Processing users from messages...")
+                    await self.process_messages_for_users(messages, chat_info)
+                    
+                    # تحلیل داده‌های چت
                     analysis_result = self.analyze_chat_data(chat_info, messages)
                     self.results.append(analysis_result)
                     
@@ -54,13 +60,33 @@ class TelegramAnalyzer:
                     logger.error(f"❌ Error analyzing {chat_link}: {e}")
                     continue
         
-        # ذخیره نتایج
+        # ذخیره نتایج چت‌ها
         await self.save_results()
+        
+        # ذخیره اطلاعات کاربران
+        logger.info("💾 Saving user profiles...")
+        self.user_tracker.save_all_users()
+        
+        # نمایش آمار
+        await self.show_final_statistics()
         
         if self.results:
             logger.info(f"🎉 Analysis completed! {len(self.results)} chats analyzed successfully.")
         else:
             logger.warning("⚠️ No chats were successfully analyzed.")
+    
+    async def process_messages_for_users(self, messages, chat_info):
+        """پردازش پیام‌ها برای ردیابی کاربران"""
+        processed_users = set()
+        
+        for message in messages:
+            if message.from_user and message.from_user.id not in processed_users:
+                processed_users.add(message.from_user.id)
+            
+            # پردازش پیام توسط user_tracker
+            self.user_tracker.process_message(message, chat_info)
+        
+        logger.info(f"👥 Processed {len(processed_users)} unique users from {len(messages)} messages")
     
     def analyze_chat_data(self, chat_info, messages) -> Dict[str, Any]:
         """تحلیل داده‌های چت"""
@@ -79,12 +105,43 @@ class TelegramAnalyzer:
                             'first_name': message.from_user.first_name,
                             'last_name': message.from_user.last_name,
                             'username': message.from_user.username,
-                            'message_count': 0
+                            'message_count': 0,
+                            'is_bot': getattr(message.from_user, 'is_bot', False)
                         }
                     users[user_id]['message_count'] += 1
             
             # مرتب‌سازی کاربران بر اساس تعداد پیام
             top_users = sorted(users.values(), key=lambda x: x['message_count'], reverse=True)[:10]
+            
+            # آمار انواع پیام
+            message_types = {
+                'text': 0,
+                'photo': 0,
+                'video': 0,
+                'audio': 0,
+                'document': 0,
+                'sticker': 0,
+                'voice': 0,
+                'other': 0
+            }
+            
+            for message in messages:
+                if message.text:
+                    message_types['text'] += 1
+                elif message.photo:
+                    message_types['photo'] += 1
+                elif message.video:
+                    message_types['video'] += 1
+                elif message.audio:
+                    message_types['audio'] += 1
+                elif message.document:
+                    message_types['document'] += 1
+                elif message.sticker:
+                    message_types['sticker'] += 1
+                elif message.voice:
+                    message_types['voice'] += 1
+                else:
+                    message_types['other'] += 1
             
             return {
                 'chat_info': {
@@ -98,21 +155,11 @@ class TelegramAnalyzer:
                 'statistics': {
                     'total_messages': total_messages,
                     'total_users': len(users),
-                    'analysis_date': datetime.now().isoformat()
+                    'bot_users': sum(1 for u in users.values() if u.get('is_bot', False)),
+                    'analysis_date': datetime.now().isoformat(),
+                    'message_types': message_types
                 },
-                'top_users': top_users,
-                'sample_messages': [
-                    {
-                        'id': msg.id,
-                        'date': msg.date.isoformat() if msg.date else None,
-                        'text': msg.text[:100] if msg.text else None,
-                        'user': {
-                            'id': msg.from_user.id if msg.from_user else None,
-                            'first_name': msg.from_user.first_name if msg.from_user else None
-                        }
-                    }
-                    for msg in messages[:5]  # فقط 5 پیام نمونه
-                ]
+                'top_users': top_users
             }
             
         except Exception as e:
@@ -142,14 +189,30 @@ class TelegramAnalyzer:
             with open(output_path, 'w', encoding='utf-8') as f:
                 json.dump(self.results, f, ensure_ascii=False, indent=2)
             
-            logger.info(f"💾 Results saved to: {output_path}")
-            
-            # خلاصه نتایج
-            total_chats = len(self.results)
-            total_messages = sum(r['statistics']['total_messages'] for r in self.results)
-            total_users = sum(r['statistics']['total_users'] for r in self.results)
-            
-            logger.info(f"📊 Summary: {total_chats} chats, {total_messages} messages, {total_users} unique users")
+            logger.info(f"💾 Chat analysis results saved to: {output_path}")
             
         except Exception as e:
             logger.error(f"❌ Error saving results: {e}")
+    
+    async def show_final_statistics(self):
+        """نمایش آمار نهایی"""
+        try:
+            # آمار چت‌ها
+            total_chats = len(self.results)
+            total_messages = sum(r['statistics']['total_messages'] for r in self.results)
+            
+            # آمار کاربران
+            user_stats = self.user_tracker.get_statistics()
+            
+            logger.info("📊 ===== FINAL STATISTICS =====")
+            logger.info(f"📱 Analyzed Chats: {total_chats}")
+            logger.info(f"💬 Total Messages: {total_messages}")
+            logger.info(f"👥 Total Users: {user_stats['total_users']}")
+            logger.info(f"🤖 Bot Users: {user_stats['bot_users']}")
+            logger.info(f"🗑️ Deleted Users: {user_stats['deleted_users']}")
+            logger.info(f"✅ Active Users: {user_stats['active_users']}")
+            logger.info(f"📁 User files saved in: users/")
+            logger.info("================================")
+            
+        except Exception as e:
+            logger.error(f"❌ Error showing statistics: {e}")
