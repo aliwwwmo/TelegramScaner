@@ -661,12 +661,23 @@ def main():
     
     # اجرای تحلیل
     analyzer = TelegramAnalyzer()
+    
+    async def run_with_app():
+        try:
+            await analyzer.run_analysis(chat_links, messages_per_chat)
+        except KeyboardInterrupt:
+            logger.info("⏹️ Analysis interrupted by user")
+        except Exception as e:
+            logger.error(f"❌ Analysis failed: {e}")
+    
     try:
-        asyncio.run(analyzer.run_analysis(chat_links, messages_per_chat))
+        # استفاده از app.run به جای asyncio.run
+        analyzer.app.run(run_with_app())
     except KeyboardInterrupt:
         logger.info("⏹️ Analysis interrupted by user")
     except Exception as e:
         logger.error(f"❌ Analysis failed: {e}")
+
 
 if __name__ == "__main__":
     main()
