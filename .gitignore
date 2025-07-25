@@ -7,4 +7,10 @@
 .env.production.local
 .idea/
 __pycache__/
-
+users
+sum
+results
+*.session
+*.log
+*.txt
+*.json
