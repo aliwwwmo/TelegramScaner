@@ -108,6 +108,18 @@ async def analyze_single_chat(chat_link: str):
         # اطمینان از وجود پوشه والد
         results_file.parent.mkdir(parents=True, exist_ok=True)
         
+        # ذخیره لینک‌های استخراج شده
+        if message_analyzer.extracted_links:
+            links_file = Path(ANALYSIS_CONFIG.results_dir) / "extracted_links.txt"
+            links_file.parent.mkdir(parents=True, exist_ok=True)
+            
+            with open(links_file, "w", encoding="utf-8") as f:
+                for link in sorted(message_analyzer.extracted_links):
+                    f.write(f"{link}\n")
+            
+            logger.info(f"🔗 Extracted links saved to: {links_file}")
+            logger.info(f"   📊 Total extracted links: {len(message_analyzer.extracted_links)}")
+        
         # ذخیره کاربران
         users_saved = user_tracker.save_all_users()
         
@@ -121,12 +133,15 @@ async def analyze_single_chat(chat_link: str):
         logger.info(f"   ❌ Deleted: {stats['deleted_users']}")
         logger.info(f"   ✅ Active: {stats['active_users']}")
         logger.info(f"   💾 Users saved: {users_saved}")
+        logger.info(f"   🔗 Extracted links: {len(message_analyzer.extracted_links)}")
         
         return {
             'chat_info': chat_info,
             'stats': stats,
             'analysis': analysis_results,
-            'users_saved': users_saved
+            'users_saved': users_saved,
+            'extracted_links': list(message_analyzer.extracted_links),
+            'extracted_links_count': len(message_analyzer.extracted_links)
         }
 
 async def main():
@@ -190,10 +205,27 @@ async def main():
             # اطمینان از وجود پوشه والد
             results_file.parent.mkdir(parents=True, exist_ok=True)
             
+            # جمع‌آوری تمام لینک‌های استخراج شده از همه چت‌ها
+            all_extracted_links = set()
+            for result in all_results:
+                if 'extracted_links' in result:
+                    all_extracted_links.update(result['extracted_links'])
+            
+            # ذخیره تمام لینک‌های استخراج شده در یک فایل
+            if all_extracted_links:
+                combined_links_file = Path(ANALYSIS_CONFIG.results_dir) / "all_extracted_links.txt"
+                with open(combined_links_file, "w", encoding="utf-8") as f:
+                    for link in sorted(all_extracted_links):
+                        f.write(f"{link}\n")
+                
+                logger.info(f"🔗 All extracted links saved to: {combined_links_file}")
+                logger.info(f"   📊 Total unique links found: {len(all_extracted_links)}")
+            
             summary = {
                 'total_chats': len(all_results),
                 'total_messages': sum(len(r.get('analysis', {}).get('messages', [])) for r in all_results),
                 'total_users': sum(r['stats']['total_users'] for r in all_results),
+                'total_extracted_links': len(all_extracted_links),
                 'results': all_results,
                 'settings': {
                     'message_limit': MESSAGE_SETTINGS.limit,
@@ -207,6 +239,7 @@ async def main():
             
             logger.info(f"💾 Results saved to: {results_file}")
             logger.info(f"✅ Analysis completed! Processed {len(all_results)} chats")
+            logger.info(f"🔗 Total extracted links: {len(all_extracted_links)}")
         
     except KeyboardInterrupt:
         logger.info("⏹️ Analysis stopped by user")
