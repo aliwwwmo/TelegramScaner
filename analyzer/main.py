@@ -12,18 +12,48 @@ from services.user_tracker import UserTracker
 from services.chat_analyzer import ChatAnalyzer
 from services.message_analyzer import MessageAnalyzer
 from services.link_analyzer import LinkAnalyzer
+from services.url_resolver import URLResolver
 from utils.logger import logger
+
+async def resolve_and_validate_link(chat_link: str) -> str:
+    """حل کردن و اعتبارسنجی لینک"""
+    logger.info(f"🔍 Checking link: {chat_link}")
+    
+    async with URLResolver() as resolver:
+        # ابتدا بررسی کنیم که آیا URL شامل لینک تلگرام است
+        extracted_telegram = resolver.extract_telegram_link(chat_link)
+        if extracted_telegram:
+            logger.info(f"✅ Found Telegram link in URL: {chat_link} -> {extracted_telegram}")
+            return extracted_telegram
+        
+        # بررسی اینکه آیا لینک از قبل لینک تلگرام است
+        if resolver.is_telegram_link(chat_link):
+            logger.info(f"✅ Link is already a Telegram link: {chat_link}")
+            return chat_link
+        
+        # حل کردن لینک برای یافتن ریدایرکت‌ها
+        resolved_link = await resolver.resolve_url(chat_link)
+        
+        if resolved_link and resolver.is_telegram_link(resolved_link):
+            logger.info(f"✅ Link resolved to Telegram: {chat_link} -> {resolved_link}")
+            return resolved_link
+        else:
+            logger.warning(f"⚠️ Link does not redirect to Telegram: {chat_link}")
+            return chat_link  # بازگرداندن لینک اصلی برای پردازش
 
 async def analyze_single_chat(chat_link: str):
     """تحلیل یک چت"""
     logger.info(f"🔍 Starting analysis for: {chat_link}")
     
+    # حل کردن و اعتبارسنجی لینک
+    resolved_link = await resolve_and_validate_link(chat_link)
+    
     async with TelegramClientManager(TELEGRAM_CONFIG) as client:
         # تحلیل کامل چت
-        chat, messages, members = await client.analyze_chat_complete(chat_link)
+        chat, messages, members = await client.analyze_chat_complete(resolved_link)
         
         if not chat:
-            logger.error(f"❌ Could not access chat: {chat_link}")
+            logger.error(f"❌ Could not access chat: {resolved_link}")
             return None
         
         # آماده سازی tracker و analyzer
@@ -39,7 +69,8 @@ async def analyze_single_chat(chat_link: str):
             'type': str(chat.type),
             'members_count': getattr(chat, 'members_count', 0),
             'description': getattr(chat, 'description', ''),
-            'link': chat_link
+            'link': resolved_link,
+            'original_link': chat_link if chat_link != resolved_link else None
         }
         
         logger.info(f"📊 Chat Info: {chat_info['title']} ({chat_info['members_count']} members)")
@@ -122,12 +153,26 @@ async def main():
         
         logger.info(f"📋 Found {len(chat_links)} chat(s) to analyze")
         
+        # حل کردن و اعتبارسنجی همه لینک‌ها
+        logger.info("🔍 Resolving and validating all links...")
+        resolved_links = []
+        for i, link in enumerate(chat_links, 1):
+            logger.info(f"🔍 Processing link {i}/{len(chat_links)}: {link}")
+            resolved_link = await resolve_and_validate_link(link)
+            resolved_links.append(resolved_link)
+            
+            # تاخیر کوتاه بین حل کردن لینک‌ها
+            if i < len(chat_links):
+                await asyncio.sleep(1)
+        
         # تحلیل هر چت
         all_results = []
-        for i, chat_link in enumerate(chat_links, 1):
-            logger.info(f"🔍 Analyzing chat {i}/{len(chat_links)}: {chat_link}")
+        for i, (original_link, resolved_link) in enumerate(zip(chat_links, resolved_links), 1):
+            logger.info(f"🔍 Analyzing chat {i}/{len(chat_links)}")
+            logger.info(f"   Original: {original_link}")
+            logger.info(f"   Resolved: {resolved_link}")
             
-            result = await analyze_single_chat(chat_link)
+            result = await analyze_single_chat(resolved_link)
             if result:
                 all_results.append(result)
                 logger.info(f"✅ Chat {i} completed successfully")
