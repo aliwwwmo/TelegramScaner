@@ -86,6 +86,13 @@ class MessageAnalyzer:
         )
         
         user_data.messages.append(message_data)
+        
+        # استخراج لینک‌ها از متن پیام
+        text = message.text or message.caption or ""
+        if text:
+            links = self.link_analyzer.extract_links_from_text(text)
+            for link in links:
+                self.extracted_links.add(link)
     
     async def analyze_chat_messages(self, chat_info: ChatAnalysisResult, limit: int = 1000):
         """تحلیل پیام‌های چت و استخراج لینک‌ها"""
