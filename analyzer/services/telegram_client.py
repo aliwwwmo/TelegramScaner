@@ -71,20 +71,19 @@ class TelegramClientManager:
         """دریافت اطلاعات چت"""
         try:
             # استخراج username از لینک
-            if 't.me/' in chat_link:
-                username = chat_link.split('t.me/')[-1].split('?')[0].split('/')[0]
-            elif '@' in chat_link:
-                username = chat_link.replace('@', '')
-            else:
-                username = chat_link
-            
-            # حذف کاراکترهای اضافی
-            username = username.strip().replace('+', '')
+            username = self._extract_username_from_link(chat_link)
             
             logger.info(f"🔍 Gettin info for: {username}")
             
-            # دریافت اطلاعات چت
-            chat = await self.client.get_chat(username)
+            # بررسی لینک‌های خصوصی
+            if username.startswith('joinchat/'):
+                logger.info(f"🔐 Private invite link detected: {username}")
+                # برای لینک‌های خصوصی، از لینک کامل استفاده کن
+                chat = await self.client.get_chat(chat_link)
+            else:
+                # برای لینک‌های عمومی
+                chat = await self.client.get_chat(username)
+            
             logger.info(f"✅ Found chat: {chat.title} (ID: {chat.id}, Members: {getattr(chat, 'members_count', 'N/A')})")
             return chat
             
@@ -98,6 +97,55 @@ class TelegramClientManager:
         except Exception as e:
             logger.error(f"❌ Error getting chat info for {chat_link}: {e}")
             return None
+    
+    def _extract_username_from_link(self, chat_link: str) -> str:
+        """استخراج username از لینک تلگرام"""
+        try:
+            # حذف فاصله‌ها
+            chat_link = chat_link.strip()
+            
+            # اگر لینک شامل t.me باشد
+            if 't.me/' in chat_link:
+                # استخراج بخش بعد از t.me/
+                parts = chat_link.split('t.me/')
+                if len(parts) > 1:
+                    # حذف پارامترهای URL و مسیرهای اضافی
+                    username_part = parts[1].split('?')[0].split('#')[0]
+                    
+                    # بررسی لینک‌های خصوصی (joinchat)
+                    if username_part.startswith('joinchat/'):
+                        # برای لینک‌های خصوصی، کل مسیر را برگردان
+                        return username_part
+                    else:
+                        # حذف مسیرهای اضافی (فقط بخش اول)
+                        username = username_part.split('/')[0]
+                        return username
+            
+            # اگر یوزرنیم با @ شروع شود
+            elif chat_link.startswith('@'):
+                return chat_link[1:]  # حذف @
+            
+            # اگر شماره تلفن باشد
+            elif chat_link.startswith('+'):
+                return chat_link
+            
+            # اگر لینک کامل باشد
+            elif chat_link.startswith('https://') or chat_link.startswith('http://'):
+                # تلاش برای استخراج از URL
+                if 't.me/' in chat_link:
+                    return self._extract_username_from_link(chat_link.split('t.me/')[-1])
+                elif 'telegram.me/' in chat_link:
+                    return self._extract_username_from_link(chat_link.split('telegram.me/')[-1])
+                else:
+                    return chat_link
+            
+            # در غیر این صورت، همان لینک را برگردان
+            else:
+                return chat_link
+                
+        except Exception as e:
+            logger.error(f"❌ Error extracting username from {chat_link}: {e}")
+            return chat_link
     
     async def get_chat_messages(self, chat_id, limit: int = None):
         """دریافت پیام‌های چت به صورت batch"""
