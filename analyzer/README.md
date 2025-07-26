@@ -6,9 +6,10 @@ A comprehensive Telegram chat analysis tool that extracts messages, members, lin
 
 - **Message Analysis**: Extract and analyze messages from Telegram chats
 - **Member Tracking**: Get detailed information about chat members
-- **Link Extraction**: Automatically extract and categorize links from messages
+- **Link Detection**: Automatically detect and extract links from messages
 - **User Tracking**: Track user activity and engagement
 - **Comprehensive Reports**: Generate detailed JSON reports
+- **Link Storage**: Save extracted links to files for further processing
 
 ## How to use
 
@@ -40,6 +41,9 @@ The program generates the following files in the `results/` directory:
 
 - `analysis_[chat_id].json` - Detailed analysis for each chat
 - `analysis_summary.json` - Overall summary of all analyses
+- `extracted_links.txt` - Links found in individual chat analysis
+- `all_extracted_links.txt` - All unique links from all analyzed chats
+- `extracted_links.json` - JSON format of extracted links
 
 ## Configuration
 
@@ -72,6 +76,6 @@ You can customize the analysis by modifying environment variables:
    ✅ Successful analyses: 2
    📝 Total messages: 2,300
    👥 Total members: 800
-   🔗 Total links: 45
+   🔗 Total extracted links: 45
 ✅ Program completed successfully!
 ``` 
