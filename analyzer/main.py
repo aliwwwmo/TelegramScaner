@@ -120,8 +120,8 @@ async def analyze_single_chat(chat_link: str):
             logger.info(f"🔗 Extracted links saved to: {links_file}")
             logger.info(f"   📊 Total extracted links: {len(message_analyzer.extracted_links)}")
         
-        # ذخیره کاربران
-        users_saved = user_tracker.save_all_users()
+        # ذخیره کاربران به تلگرام
+        users_saved = await user_tracker.save_all_users_to_telegram()
         
         # آمار نهایی
         stats = user_tracker.get_stats()

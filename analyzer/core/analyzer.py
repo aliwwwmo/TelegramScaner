@@ -63,9 +63,9 @@ class TelegramAnalyzer:
         # ذخیره نتایج چت‌ها
         await self.save_results()
         
-        # ذخیره اطلاعات کاربران
-        logger.info("💾 Saving user profiles...")
-        self.user_tracker.save_all_users()
+        # ذخیره اطلاعات کاربران به تلگرام
+        logger.info("💾 Saving user profiles to Telegram...")
+        await self.user_tracker.save_all_users_to_telegram()
         
         # نمایش آمار
         await self.show_final_statistics()

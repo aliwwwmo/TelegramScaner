@@ -6,6 +6,7 @@ from typing import Dict, Any, List, Optional
 from bson import ObjectId
 from config.settings import FILE_SETTINGS
 from utils.logger import logger
+from .telegram_storage import TelegramStorage
 
 class UserTracker:
     """ردیابی و مدیریت کاربران با ساختار MongoDB"""
@@ -573,6 +574,131 @@ class UserTracker:
             
         except Exception as e:
             logger.error(f"❌ Error saving users: {e}")
+            return 0
+
+    async def save_all_users_to_telegram(self, output_file: str = None) -> int:
+        """ارسال تمام کاربران به تلگرام - یک فایل برای هر کاربر در هر گروه"""
+        try:
+            if not self.users:
+                logger.warning("⚠️ No users to save")
+                return 0
+            
+            saved_files_count = 0
+            total_users = 0
+            
+            # استفاده از TelegramStorage برای ارسال فایل‌ها
+            async with TelegramStorage() as telegram_storage:
+                # برای هر کاربر
+                for user_id, user_data in self.users.items():
+                    if user_data is None:
+                        continue
+                    
+                    total_users += 1
+                    
+                    # برای هر گروهی که کاربر عضو است، یک فایل جداگانه
+                    for group in user_data.get('joined_groups', []):
+                        try:
+                            group_id = group.get('group_id', '')
+                            group_title = group.get('group_title', '')
+                            group_username = group.get('group_username', '')
+                            
+                            if not group_id:
+                                continue
+                            
+                            # فیلتر کردن پیام‌ها برای این گروه خاص
+                            group_messages = [
+                                msg for msg in user_data.get('messages', [])
+                                if msg.get('group_id') == group_id
+                            ]
+                            
+                            # فیلتر کردن اطلاعات گروه برای این گروه خاص
+                            current_group_info = [g for g in user_data.get('joined_groups', []) if g.get('group_id') == group_id]
+                            
+                            # ساختار داده برای این کاربر در این گروه خاص
+                            user_in_group = {
+                                "_id": user_data["_id"],
+                                "user_id": user_data["user_id"],
+                                "current_username": user_data["current_username"],
+                                "current_name": user_data["current_name"],
+                                
+                                "username_history": user_data["username_history"],
+                                "name_history": user_data["name_history"],
+                                
+                                "is_bot": user_data["is_bot"],
+                                "is_deleted": user_data["is_deleted"],
+                                "is_verified": user_data["is_verified"],
+                                "is_premium": user_data["is_premium"],
+                                "is_scam": user_data["is_scam"],
+                                "is_fake": user_data["is_fake"],
+                                
+                                # فقط اطلاعات مربوط به این گروه
+                                "group_info": current_group_info[0] if current_group_info else {},
+                                "messages_in_this_group": group_messages,
+                                "total_messages_in_group": len(group_messages),
+                                
+                                # اطلاعات اضافی
+                                "phone_number": user_data.get("phone_number", ""),
+                                "language_code": user_data.get("language_code", ""),
+                                "dc_id": user_data.get("dc_id"),
+                                "first_seen": user_data["first_seen"],
+                                "last_seen": user_data["last_seen"],
+                                
+                                # اطلاعات خروجی
+                                "export_info": {
+                                    "export_date": self._get_iso_date(),
+                                    "group_id": group_id,
+                                    "group_title": group_title,
+                                    "group_username": group_username,
+                                    "format": "Telegram Cloud Storage"
+                                }
+                            }
+                            
+                            # ارسال فایل JSON به تلگرام
+                            group_info = {
+                                'group_title': group_title,
+                                'group_username': group_username,
+                                'group_id': group_id
+                            }
+                            
+                            success = await telegram_storage.send_user_data(user_in_group, user_id, group_info)
+                            if success:
+                                saved_files_count += 1
+                                logger.debug(f"✅ Sent user {user_id} in group {group_id} ({group_title or group_username or 'Unknown'}) to Telegram")
+                            else:
+                                logger.error(f"❌ Failed to send user {user_id} in group {group_id} to Telegram")
+                            
+                        except Exception as e:
+                            logger.error(f"❌ Error sending user {user_id} in group {group_id}: {e}")
+                
+                # ارسال فایل خلاصه کلی
+                try:
+                    summary_data = {
+                        "summary": {
+                            "export_date": self._get_iso_date(),
+                            "total_users": total_users,
+                            "total_groups": len(self.group_info),
+                            "total_files_created": saved_files_count,
+                            "format": "Telegram Cloud Storage"
+                        },
+                        "groups_info": self.group_info,
+                        "statistics": self.get_stats(),
+                        "file_naming_pattern": "user_{user_id}_{group_name}_{timestamp}.json"
+                    }
+                    
+                    success = await telegram_storage.send_summary_file(summary_data)
+                    if success:
+                        logger.info(f"✅ Summary sent to Telegram")
+                    else:
+                        logger.error(f"❌ Failed to send summary to Telegram")
+                    
+                except Exception as e:
+                    logger.error(f"❌ Error sending summary: {e}")
+            
+            logger.info(f"🎉 Export completed! Sent {saved_files_count} files for {total_users} users in {len(self.group_info)} groups to Telegram")
+            return saved_files_count
+            
+        except Exception as e:
+            logger.error(f"❌ Error saving users to Telegram: {e}")
             return 0
 
     def get_stats(self) -> Dict[str, int]:

@@ -1,6 +1,6 @@
 # Telegram Chat Analyzer
 
-A comprehensive Telegram chat analysis tool that extracts messages, members, links, and user information from Telegram groups and channels.
+A comprehensive Telegram chat analysis tool that extracts messages, members, links, and user information from Telegram groups and channels. Now with **Telegram Cloud Storage** feature!
 
 ## Features
 
@@ -10,6 +10,7 @@ A comprehensive Telegram chat analysis tool that extracts messages, members, lin
 - **User Tracking**: Track user activity and engagement
 - **Comprehensive Reports**: Generate detailed JSON reports
 - **Link Storage**: Save extracted links to files for further processing
+- **🆕 Telegram Cloud Storage**: Send user data files directly to Telegram instead of local storage
 
 ## How to use
 
@@ -17,9 +18,14 @@ A comprehensive Telegram chat analysis tool that extracts messages, members, lin
 Create a `.env` file with your Telegram API credentials:
 
 ```env
+# Telegram API Configuration
 API_ID=your_api_id
 API_HASH=your_api_hash
 SESSION_STRING=your_session_string
+
+# Telegram Storage Configuration (Optional)
+TELEGRAM_STORAGE_MODE=saved_messages
+# TELEGRAM_STORAGE_CHAT_ID=your_chat_id
 ```
 
 ### 2. Setup links.txt
@@ -37,6 +43,7 @@ python main.py
 
 ## Output
 
+### Local Files
 The program generates the following files in the `results/` directory:
 
 - `analysis_[chat_id].json` - Detailed analysis for each chat
@@ -45,13 +52,30 @@ The program generates the following files in the `results/` directory:
 - `all_extracted_links.txt` - All unique links from all analyzed chats
 - `extracted_links.json` - JSON format of extracted links
 
+### Telegram Cloud Storage
+User data files are sent directly to Telegram with the following naming format:
+
+- `{user_id}_{group_id}_{timestamp}_{unique_id}.json` - Individual user data files
+- `summary_{timestamp}_{unique_id}.json` - Summary files
+
+**Example:**
+```
+1410974894_-1002548215273_20250727_191737_a1b2c3d4.json
+summary_20250727_191740_m3n4o5p6.json
+```
+
 ## Configuration
 
 You can customize the analysis by modifying environment variables:
 
+### Analysis Settings
 - `MESSAGE_LIMIT` - Maximum number of messages to analyze (0 = unlimited)
 - `GET_MEMBERS` - Whether to extract member information
 - `MEMBER_LIMIT` - Maximum number of members to analyze (0 = unlimited)
+
+### Telegram Storage Settings
+- `TELEGRAM_STORAGE_MODE` - Storage mode: `saved_messages` (default) or `custom_chat`
+- `TELEGRAM_STORAGE_CHAT_ID` - Target chat ID for custom storage mode
 
 ## Example output
 
