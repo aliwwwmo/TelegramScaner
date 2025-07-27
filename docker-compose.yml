@@ -1,0 +1,89 @@
+version: '3.8'
+
+services:
+  telegram-scanner:
+    build: .
+    container_name: telegram-scanner
+    environment:
+      # Telegram API credentials (required)
+      - API_ID=${API_ID}
+      - API_HASH=${API_HASH}
+      - SESSION_STRING=${SESSION_STRING}
+      
+      # Analysis settings
+      - MESSAGE_LIMIT=${MESSAGE_LIMIT:-1000}
+      - MEMBER_LIMIT=${MEMBER_LIMIT:-5000}
+      - GET_MEMBERS=${GET_MEMBERS:-true}
+      - INCLUDE_BOTS=${INCLUDE_BOTS:-true}
+      
+      # File paths
+      - RESULTS_DIR=/app/results
+      - USERS_DIR=/app/users
+      - LOGS_DIR=/app/logs
+      - LINKS_FILE=/app/links.txt
+      - OUTPUT_FILE=my_chats.json
+      
+      # Analysis options
+      - SAVE_MESSAGE_TEXT=${SAVE_MESSAGE_TEXT:-true}
+      - ANALYZE_MEDIA=${ANALYZE_MEDIA:-true}
+      - TRACK_REACTIONS=${TRACK_REACTIONS:-true}
+      - TRACK_FORWARDS=${TRACK_FORWARDS:-true}
+      - DEEP_SCAN=${DEEP_SCAN:-true}
+      
+      # Performance settings
+      - MESSAGE_BATCH_SIZE=${MESSAGE_BATCH_SIZE:-100}
+      - MEMBER_BATCH_SIZE=${MEMBER_BATCH_SIZE:-200}
+      - DELAY_BETWEEN_BATCHES=${DELAY_BETWEEN_BATCHES:-1}
+      
+    volumes:
+      # Mount data directories for persistence
+      - ./results:/app/results
+      - ./users:/app/users
+      - ./logs:/app/logs
+      - ./data:/app/data
+      
+      # Mount configuration files
+      - ./links.txt:/app/links.txt
+      - ./.env:/app/.env:ro
+      
+    ports:
+      - "8000:8000"  # For potential web interface
+      
+    restart: unless-stopped
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+
+  # Optional: MongoDB for user tracking (if needed)
+  mongodb:
+    image: mongo:6.0
+    container_name: telegram-scanner-mongo
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=admin
+      - MONGO_INITDB_ROOT_PASSWORD=password
+      - MONGO_INITDB_DATABASE=telegram_scanner
+    volumes:
+      - mongodb_data:/data/db
+    ports:
+      - "27017:27017"
+    restart: unless-stopped
+    profiles:
+      - database
+
+volumes:
+  mongodb_data:
+    driver: local 
