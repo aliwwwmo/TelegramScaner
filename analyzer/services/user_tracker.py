@@ -20,6 +20,23 @@ class UserTracker:
         self.users_dir = Path(FILE_SETTINGS.users_dir)
         self.users_dir.mkdir(exist_ok=True)
     
+    def _generate_message_link(self, chat_username: str, message_id: int) -> str:
+        """تولید لینک پیام تلگرام"""
+        try:
+            if not chat_username or not message_id:
+                return ""
+            
+            # حذف @ از ابتدای username اگر وجود داشته باشد
+            username = chat_username.lstrip('@')
+            
+            # تولید لینک پیام
+            message_link = f"https://t.me/{username}/{message_id}"
+            return message_link
+            
+        except Exception as e:
+            logger.error(f"❌ Error generating message link: {e}")
+            return ""
+    
     def _generate_object_id(self) -> str:
         """تولید ObjectId برای MongoDB"""
         return str(ObjectId())
@@ -99,7 +116,7 @@ class UserTracker:
                 user = message.from_user
                 self._add_user_message(user, chat_info, message)
             else:
-                logger.debug("� Message has no from_user, skipping")
+                logger.debug("⚠️ Message has no from_user, skipping")
                 
         except Exception as e:
             logger.error(f"❌ Error processing message: {e}")
@@ -207,17 +224,23 @@ class UserTracker:
             # به‌روزرسانی اطلاعات کاربری
             self._update_user_info(user_data, user)
             
+            # تولید لینک پیام
+            chat_username = chat_info.get('username', '')
+            message_id = getattr(message, 'id', 0)
+            message_link = self._generate_message_link(chat_username, message_id)
+            
             # اطلاعات پیام
             message_entry = {
                 "group_id": chat_id,
                 "group_title": chat_info.get('title', ''),
-                "message_id": getattr(message, 'id', 0),
+                "message_id": message_id,
                 "text": getattr(message, 'text', '') or getattr(message, 'caption', '') or '',
                 "timestamp": self._get_iso_date(getattr(message, 'date', None)),
                 "reactions": self._extract_reactions(message),
                 "reply_to": getattr(message, 'reply_to_message_id', None),
                 "edited": getattr(message, 'edit_date', None) is not None,
-                "is_forwarded": getattr(message, 'forward_date', None) is not None
+                "is_forwarded": getattr(message, 'forward_date', None) is not None,
+                "message_link": message_link  # اضافه کردن لینک پیام
             }
             
             # حذف مقادیر None

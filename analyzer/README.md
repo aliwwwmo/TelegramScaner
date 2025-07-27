@@ -1,6 +1,6 @@
 # Telegram Chat Analyzer
 
-A comprehensive Telegram chat analysis tool that extracts messages, members, links, and user information from Telegram groups and channels. Now with **Telegram Cloud Storage** feature!
+A comprehensive Telegram chat analysis tool that extracts messages, members, links, and user information from Telegram groups and channels. Now with **Telegram Cloud Storage** feature and **Message Links**!
 
 ## Features
 
@@ -11,6 +11,7 @@ A comprehensive Telegram chat analysis tool that extracts messages, members, lin
 - **Comprehensive Reports**: Generate detailed JSON reports
 - **Link Storage**: Save extracted links to files for further processing
 - **🆕 Telegram Cloud Storage**: Send user data files directly to Telegram instead of local storage
+- **🆕 Message Links**: Generate direct links to individual messages in user data
 
 ## How to use
 
@@ -64,6 +65,28 @@ User data files are sent directly to Telegram with the following naming format:
 summary_20250727_191740_m3n4o5p6.json
 ```
 
+### Message Links Feature
+Each message in user data now includes a direct link to the original message:
+
+```json
+{
+  "messages_in_this_group": [
+    {
+      "message_id": 12345,
+      "text": "Hello world!",
+      "timestamp": "2024-01-15T10:30:00Z",
+      "message_link": "https://t.me/example_channel/12345"
+    }
+  ]
+}
+```
+
+**Benefits:**
+- Direct access to original messages
+- Easy verification of message content
+- Quick navigation to specific messages
+- Enhanced user data analysis capabilities
+
 ## Configuration
 
 You can customize the analysis by modifying environment variables:
@@ -87,11 +110,13 @@ You can customize the analysis by modifying environment variables:
 🔍 Analysis 1/2: https://t.me/example_group
    📝 Retrieved 1500 messages
    👥 Retrieved 500 members
+   🔗 Generated message links for all messages
 ✅ Analysis completed: https://t.me/example_group
    📄 Results saved to: results/analysis_-1001234567890.json
 🔍 Analysis 2/2: @example_channel
    📝 Retrieved 800 messages
    👥 Retrieved 300 members
+   🔗 Generated message links for all messages
 ✅ Analysis completed: @example_channel
    📄 Results saved to: results/analysis_-1009876543210.json
 ============================================================
@@ -101,5 +126,6 @@ You can customize the analysis by modifying environment variables:
    📝 Total messages: 2,300
    👥 Total members: 800
    🔗 Total extracted links: 45
+   🔗 Total message links generated: 2,300
 ✅ Program completed successfully!
 ``` 

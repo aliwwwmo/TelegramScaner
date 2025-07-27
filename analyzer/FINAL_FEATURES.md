@@ -7,6 +7,7 @@
 - Analyze message content and metadata
 - Track message reactions and forwards
 - Process both text messages and media captions
+- **🆕 Generate direct message links** for easy access to original messages
 
 ### 2. **Member Tracking**
 - Extract detailed member information
@@ -37,6 +38,13 @@
 - Create user activity summaries
 - Export data in multiple formats
 - Provide statistical analysis
+
+### 6. **🆕 Message Links Feature**
+- Generate direct links to individual messages
+- Format: `https://t.me/username/message_id`
+- Include links in user data exports
+- Enable easy verification and navigation
+- Support for all message types (text, media, etc.)
 
 ## 📁 File Structure
 
@@ -96,6 +104,20 @@ https://t.me/joinchat/HASH
 - `all_extracted_links.txt` - All unique links
 - `extracted_links.json` - JSON format
 
+### Message Links in User Data
+```json
+{
+  "messages_in_this_group": [
+    {
+      "message_id": 12345,
+      "text": "Hello world!",
+      "timestamp": "2024-01-15T10:30:00Z",
+      "message_link": "https://t.me/example_channel/12345"
+    }
+  ]
+}
+```
+
 ## 🎯 Usage
 
 ### 1. Setup
@@ -134,12 +156,14 @@ cat my_chats.json
 - **Link extraction**: Automatically finds and extracts links
 - **User tracking**: Monitors user activity and changes
 - **Metadata capture**: Records reactions, forwards, edits
+- **🆕 Message links**: Generate direct links to original messages
 
 ### Data Management
 - **Structured storage**: JSON format for easy processing
 - **User profiles**: Detailed user activity tracking
 - **Link categorization**: Classifies different link types
 - **Statistical reporting**: Provides comprehensive analytics
+- **🆕 Message verification**: Direct access to original messages via links
 
 ## 🔍 Monitoring
 
@@ -151,9 +175,11 @@ The system provides detailed logging:
    📝 Processing 1500 messages...
    🔗 Extracted links saved to: results/extracted_links.txt
    📊 Total extracted links: 45
+   🔗 Generated message links for all messages
 ✅ Chat 1 completed successfully
 🔗 All extracted links saved to: results/all_extracted_links.txt
    📊 Total unique links found: 78
+   🔗 Total message links generated: 1500
 ✅ Analysis completed! Processed 2 chats
 ```
 
@@ -169,12 +195,24 @@ patterns = [
 ]
 ```
 
+### Message Link Generation
+```python
+def _generate_message_link(self, chat_username: str, message_id: int) -> str:
+    """تولید لینک پیام تلگرام"""
+    if not chat_username or not message_id:
+        return ""
+    
+    username = chat_username.lstrip('@')
+    return f"https://t.me/{username}/{message_id}"
+```
+
 ### Supported Link Types
 - **Public channels**: `https://t.me/channel`
 - **Private groups**: `https://t.me/joinchat/HASH`
 - **Username mentions**: `@username`
 - **Short links**: `t.me/username`
 - **Regular URLs**: `https://example.com`
+- **🆕 Message links**: `https://t.me/username/message_id`
 
 ## ✅ Quality Assurance
 
@@ -183,7 +221,8 @@ patterns = [
 - **Data validation**: Validates all extracted data
 - **File integrity**: Ensures proper file saving
 - **Logging**: Comprehensive activity tracking
+- **🆕 Message link validation**: Ensures valid username and message ID
 
 ## 🚀 Ready for Production
 
-The system is now fully functional and ready for production use. All features are integrated and tested, with comprehensive documentation and error handling. 
+The system is now fully functional and ready for production use. All features are integrated and tested, with comprehensive documentation and error handling. The new message links feature enhances user data analysis by providing direct access to original messages. 

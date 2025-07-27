@@ -43,6 +43,7 @@ class MessageData:
     reply_to: Optional[int] = None
     edited: bool = False
     is_forwarded: bool = False
+    message_link: str = ""  # لینک پیام تلگرام
 
 @dataclass
 class GroupInfo:

@@ -19,6 +19,23 @@ class MessageAnalyzer:
         self.processed_users: Dict[int, UserData] = {}
         self.extracted_links = set()
     
+    def _generate_message_link(self, chat_username: str, message_id: int) -> str:
+        """تولید لینک پیام تلگرام"""
+        try:
+            if not chat_username or not message_id:
+                return ""
+            
+            # حذف @ از ابتدای username اگر وجود داشته باشد
+            username = chat_username.lstrip('@')
+            
+            # تولید لینک پیام
+            message_link = f"https://t.me/{username}/{message_id}"
+            return message_link
+            
+        except Exception as e:
+            logger.error(f"❌ Error generating message link: {e}")
+            return ""
+    
     async def process_user_message(self, message: Message, group_id: str, group_title: str = ""):
         """پردازش پیام کاربر و ذخیره اطلاعات"""
         if not message.from_user:
@@ -68,6 +85,15 @@ class MessageAnalyzer:
             )
             user_data.joined_groups.append(group_info)
         
+        # تولید لینک پیام
+        # استخراج username از group_id یا group_title
+        chat_username = ""
+        if hasattr(message, 'chat') and message.chat:
+            chat_username = getattr(message.chat, 'username', '')
+        
+        message_id = message.id
+        message_link = self._generate_message_link(chat_username, message_id)
+        
         # اضافه کردن پیام
         reactions = []
         if hasattr(message, 'reactions') and message.reactions:
@@ -82,7 +108,8 @@ class MessageAnalyzer:
             reactions=reactions,
             reply_to=message.reply_to_message_id,
             edited=bool(message.edit_date),
-            is_forwarded=bool(message.forward_date)
+            is_forwarded=bool(message.forward_date),
+            message_link=message_link  # اضافه کردن لینک پیام
         )
         
         user_data.messages.append(message_data)

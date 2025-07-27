@@ -219,6 +219,16 @@ class ComprehensiveAnalyzer:
     
     def _extract_message_data(self, message: Message) -> Dict[str, Any]:
         """استخراج اطلاعات کامل پیام"""
+        
+        # تولید لینک پیام
+        message_link = ""
+        if hasattr(message, 'chat') and message.chat:
+            chat_username = getattr(message.chat, 'username', '')
+            if chat_username:
+                # حذف @ از ابتدای username اگر وجود داشته باشد
+                username = chat_username.lstrip('@')
+                message_link = f"https://t.me/{username}/{message.id}"
+        
         message_data = {
             'id': message.id,
             'date': message.date.isoformat() if message.date else None,
@@ -238,7 +248,8 @@ class ComprehensiveAnalyzer:
             'entities': self._extract_entities(message.entities) if message.entities else None,
             'media_info': {},
             'reactions': [],
-            'forward_info': {}
+            'forward_info': {},
+            'message_link': message_link  # اضافه کردن لینک پیام
         }
         
         return message_data
