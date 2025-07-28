@@ -2,20 +2,27 @@
 
 ## 🚀 Main Features
 
-### 1. **Message Analysis**
+### 1. **Group Filtering & Processing** ⭐ NEW
+- **Automatic chat type detection**: Groups, Supergroups, Channels, Private chats
+- **Group-only user extraction**: Only process groups and supergroups for user data
+- **Channel database storage**: Save channel information to MongoDB without user extraction
+- **Comprehensive statistics**: Detailed reporting of processed vs skipped chats
+- **Smart filtering**: Skip channels and other chat types while preserving information
+
+### 2. **Message Analysis**
 - Extract messages from Telegram groups and channels
 - Analyze message content and metadata
 - Track message reactions and forwards
 - Process both text messages and media captions
 - **🆕 Generate direct message links** for easy access to original messages
 
-### 2. **Member Tracking**
-- Extract detailed member information
+### 3. **Member Tracking**
+- Extract detailed member information from groups only
 - Track user activity and engagement
 - Monitor username and name changes
 - Identify bots and deleted accounts
 
-### 3. **Link Detection & Extraction** ⭐ NEW
+### 4. **Link Detection & Extraction**
 - Automatically detect links in messages
 - Extract various link formats:
   - `https://t.me/channel_name`
@@ -27,24 +34,37 @@
 - Prevent duplicate links
 - Generate comprehensive link reports
 
-### 4. **URL Resolution**
+### 5. **URL Resolution**
 - Resolve redirect links to find actual Telegram links
 - Handle Google Translate and other redirect services
 - Validate and categorize link types
 - Track redirect chains
 
-### 5. **Comprehensive Reporting**
+### 6. **MongoDB Integration** ⭐ NEW
+- Store chat information in MongoDB database
+- Track scan status and statistics
+- Save both processed and skipped chat data
+- Maintain comprehensive chat history
+
+### 7. **Comprehensive Reporting**
 - Generate detailed JSON reports
 - Create user activity summaries
 - Export data in multiple formats
 - Provide statistical analysis
+- **🆕 Enhanced statistics**: Processed groups, saved channels, failed attempts
 
-### 6. **🆕 Message Links Feature**
+### 8. **🆕 Message Links Feature**
 - Generate direct links to individual messages
 - Format: `https://t.me/username/message_id`
 - Include links in user data exports
 - Enable easy verification and navigation
 - Support for all message types (text, media, etc.)
+
+### 9. **Telegram Cloud Storage**
+- Send user data files directly to Telegram
+- Store files in Saved Messages or custom chat
+- Automatic file naming and organization
+- Cloud-based data management
 
 ## 📁 File Structure
 
@@ -59,6 +79,7 @@ analyzer/
 │   ├── message_analyzer.py          # Message processing
 │   ├── link_analyzer.py             # Link extraction
 │   ├── user_tracker.py              # User tracking
+│   ├── mongo_service.py             # MongoDB integration
 │   └── file_manager.py              # File operations
 ├── models/
 │   └── data_models.py               # Data structures
@@ -67,27 +88,36 @@ analyzer/
 └── results/                         # Output directory
     ├── extracted_links.txt          # Individual chat links
     ├── all_extracted_links.txt      # Combined links
-    └── sample_extracted_links.txt   # Sample format
+    └── analysis_summary.json        # Analysis summary
 ```
 
 ## 🔧 Configuration
 
 ### Environment Variables (.env)
 ```env
+# Telegram API Configuration
 API_ID=your_api_id
 API_HASH=your_api_hash
 SESSION_STRING=your_session_string
-MESSAGES_PER_CHAT=1000
-RESULTS_DIR=results
-USERS_DIR=users
-LINKS_FILE=links.txt
-OUTPUT_FILE=my_chats.json
+
+# MongoDB Configuration (Optional)
+MONGO_URI=mongodb://localhost:27017/
+MONGO_DB_NAME=telegram_analyzer
+
+# Telegram Storage Configuration (Optional)
+TELEGRAM_STORAGE_MODE=saved_messages
+TELEGRAM_STORAGE_CHAT_ID=your_chat_id
+
+# Analysis Settings
+MESSAGE_LIMIT=1000
+GET_MEMBERS=true
+MEMBER_LIMIT=5000
 ```
 
 ### Input File (links.txt)
 ```
-https://t.me/example_channel
-@example_group
+https://t.me/example_group
+@example_channel
 +1234567890
 https://t.me/joinchat/HASH
 ```
@@ -95,134 +125,46 @@ https://t.me/joinchat/HASH
 ## 📊 Output Files
 
 ### Analysis Results
-- `my_chats.json` - Main analysis summary
-- `analysis_summary.json` - Detailed summary
-- `users/user_[id].json` - Individual user data
+- `analysis_summary.json` - Main analysis summary
+- `extracted_links.txt` - Individual chat links
+- `all_extracted_links.txt` - Combined unique links
 
-### Link Detection Results
-- `extracted_links.txt` - Links from current chat
-- `all_extracted_links.txt` - All unique links
-- `extracted_links.json` - JSON format
+### Telegram Cloud Storage
+- `{user_id}_{group_id}_{timestamp}_{unique_id}.json` - User data files
+- `summary_{timestamp}_{unique_id}.json` - Summary files
 
-### Message Links in User Data
-```json
-{
-  "messages_in_this_group": [
-    {
-      "message_id": 12345,
-      "text": "Hello world!",
-      "timestamp": "2024-01-15T10:30:00Z",
-      "message_link": "https://t.me/example_channel/12345"
-    }
-  ]
-}
+### MongoDB Database
+- Chat information for all processed and skipped chats
+- Scan statistics and status tracking
+- Comprehensive chat history
+
+## 🎯 Processing Logic
+
+### Chat Type Handling
+- ✅ **Groups & Supergroups**: Full processing (messages + users + links)
+- 📢 **Channels**: Database storage only (no user extraction)
+- 📝 **Other chats**: Database storage only (no user extraction)
+
+### Statistics Output
+```
+📊 Analysis Summary:
+   ✅ Successfully processed: 5 groups
+   📢 Channels saved to DB: 3
+   📝 Other chats saved to DB: 1
+   ⏭️ Total skipped: 4
+   ❌ Failed: 1
+   📋 Total links: 9
+   🔗 Total extracted links: 45
+   👤 Total users extracted: 800
+   💬 Total messages processed: 2,300
 ```
 
-## 🎯 Usage
+## 🚀 Key Benefits
 
-### 1. Setup
-```bash
-cd analyzer
-# Edit .env with your API credentials
-# Add chat links to links.txt
-```
-
-### 2. Run Analysis
-```bash
-python main.py
-```
-
-### 3. Check Results
-```bash
-# View extracted links
-cat results/extracted_links.txt
-cat results/all_extracted_links.txt
-
-# View analysis summary
-cat my_chats.json
-```
-
-## 📈 Features in Detail
-
-### Link Detection System
-- **Real-time extraction**: Links are extracted as messages are processed
-- **Multiple formats**: Supports all common Telegram link formats
-- **Duplicate prevention**: Uses sets to avoid duplicate links
-- **File organization**: Saves links in both individual and combined files
-- **Comprehensive logging**: Tracks extraction statistics
-
-### Message Processing
-- **Text analysis**: Processes both message text and captions
-- **Link extraction**: Automatically finds and extracts links
-- **User tracking**: Monitors user activity and changes
-- **Metadata capture**: Records reactions, forwards, edits
-- **🆕 Message links**: Generate direct links to original messages
-
-### Data Management
-- **Structured storage**: JSON format for easy processing
-- **User profiles**: Detailed user activity tracking
-- **Link categorization**: Classifies different link types
-- **Statistical reporting**: Provides comprehensive analytics
-- **🆕 Message verification**: Direct access to original messages via links
-
-## 🔍 Monitoring
-
-The system provides detailed logging:
-```
-🚀 Starting Telegram Chat Analyzer...
-📋 Found 2 chat(s) to analyze
-🔍 Analyzing chat 1/2: https://t.me/example
-   📝 Processing 1500 messages...
-   🔗 Extracted links saved to: results/extracted_links.txt
-   📊 Total extracted links: 45
-   🔗 Generated message links for all messages
-✅ Chat 1 completed successfully
-🔗 All extracted links saved to: results/all_extracted_links.txt
-   📊 Total unique links found: 78
-   🔗 Total message links generated: 1500
-✅ Analysis completed! Processed 2 chats
-```
-
-## 🛠️ Technical Details
-
-### Link Detection Patterns
-```python
-patterns = [
-    r'https?://[^\s<>"\']+',    # Full URLs
-    r'www\.[^\s<>"\']+',        # www URLs
-    r't\.me/[^\s<>"\']+',       # Short Telegram links
-    r'@[a-zA-Z0-9_]+',          # Username mentions
-]
-```
-
-### Message Link Generation
-```python
-def _generate_message_link(self, chat_username: str, message_id: int) -> str:
-    """تولید لینک پیام تلگرام"""
-    if not chat_username or not message_id:
-        return ""
-    
-    username = chat_username.lstrip('@')
-    return f"https://t.me/{username}/{message_id}"
-```
-
-### Supported Link Types
-- **Public channels**: `https://t.me/channel`
-- **Private groups**: `https://t.me/joinchat/HASH`
-- **Username mentions**: `@username`
-- **Short links**: `t.me/username`
-- **Regular URLs**: `https://example.com`
-- **🆕 Message links**: `https://t.me/username/message_id`
-
-## ✅ Quality Assurance
-
-- **Error handling**: Graceful handling of API errors
-- **Rate limiting**: Respects Telegram API limits
-- **Data validation**: Validates all extracted data
-- **File integrity**: Ensures proper file saving
-- **Logging**: Comprehensive activity tracking
-- **🆕 Message link validation**: Ensures valid username and message ID
-
-## 🚀 Ready for Production
-
-The system is now fully functional and ready for production use. All features are integrated and tested, with comprehensive documentation and error handling. The new message links feature enhances user data analysis by providing direct access to original messages. 
+1. **Smart Filtering**: Only extract users from groups, save channel info
+2. **Complete Database**: All chat information stored in MongoDB
+3. **Message Links**: Direct access to original messages
+4. **Cloud Storage**: Telegram-based file management
+5. **Comprehensive Reporting**: Detailed statistics and analysis
+6. **Error Handling**: Robust error handling and recovery
+7. **Scalable**: Handles large numbers of chats efficiently 

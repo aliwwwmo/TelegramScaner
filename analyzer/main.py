@@ -75,6 +75,86 @@ async def analyze_single_chat(chat_link: str):
                 elif str(chat.type) == 'ChatType.PRIVATE':
                     chat_type = ChatType.PRIVATE
             
+            # بررسی اینکه آیا چت گروه است یا نه
+            is_group = chat_type in [ChatType.GROUP, ChatType.SUPERGROUP]
+            is_channel = chat_type == ChatType.CHANNEL
+            
+            if is_channel:
+                logger.warning(f"⚠️ Skipping channel: {chat.title} (ID: {chat.id})")
+                logger.info(f"   📢 Channel type detected - only groups are processed")
+                
+                # ایجاد اطلاعات کانال برای ذخیره در دیتابیس
+                channel_info = GroupInfo(
+                    chat_id=chat.id,
+                    username=getattr(chat, 'username', None),
+                    link=resolved_link,
+                    chat_type=chat_type,
+                    is_public=is_public
+                )
+                
+                # ذخیره اطلاعات کانال در MongoDB
+                async with MongoServiceManager() as mongo_service:
+                    if await mongo_service.save_group_info(channel_info):
+                        logger.info(f"✅ Channel info saved to MongoDB: {channel_info.chat_id}")
+                    else:
+                        logger.error(f"❌ Failed to save channel info to MongoDB: {channel_info.chat_id}")
+                
+                return {
+                    'chat_info': {
+                        'id': chat.id,
+                        'title': chat.title,
+                        'username': getattr(chat, 'username', None),
+                        'type': str(chat.type),
+                        'members_count': getattr(chat, 'members_count', 0),
+                        'description': getattr(chat, 'description', ''),
+                        'link': resolved_link,
+                        'original_link': chat_link if chat_link != resolved_link else None
+                    },
+                    'analysis_results': None,
+                    'group_info': channel_info,
+                    'scan_status': ScanStatus.SKIPPED,
+                    'skip_reason': 'channel_detected'
+                }
+            
+            if not is_group:
+                logger.warning(f"⚠️ Skipping non-group chat: {chat.title} (ID: {chat.id}, Type: {chat_type})")
+                logger.info(f"   ❌ Non-group type detected - only groups are processed")
+                
+                # ایجاد اطلاعات چت برای ذخیره در دیتابیس
+                other_chat_info = GroupInfo(
+                    chat_id=chat.id,
+                    username=getattr(chat, 'username', None),
+                    link=resolved_link,
+                    chat_type=chat_type,
+                    is_public=is_public
+                )
+                
+                # ذخیره اطلاعات چت در MongoDB
+                async with MongoServiceManager() as mongo_service:
+                    if await mongo_service.save_group_info(other_chat_info):
+                        logger.info(f"✅ Chat info saved to MongoDB: {other_chat_info.chat_id}")
+                    else:
+                        logger.error(f"❌ Failed to save chat info to MongoDB: {other_chat_info.chat_id}")
+                
+                return {
+                    'chat_info': {
+                        'id': chat.id,
+                        'title': chat.title,
+                        'username': getattr(chat, 'username', None),
+                        'type': str(chat.type),
+                        'members_count': getattr(chat, 'members_count', 0),
+                        'description': getattr(chat, 'description', ''),
+                        'link': resolved_link,
+                        'original_link': chat_link if chat_link != resolved_link else None
+                    },
+                    'analysis_results': None,
+                    'group_info': other_chat_info,
+                    'scan_status': ScanStatus.SKIPPED,
+                    'skip_reason': 'non_group_chat'
+                }
+            
+            logger.info(f"✅ Processing group: {chat.title} (Type: {chat_type})")
+            
             # تعیین public/private بودن
             is_public = bool(getattr(chat, 'username', None))
             
@@ -259,6 +339,7 @@ async def main():
         
         # تحلیل هر چت
         all_results = []
+        skipped_results = []
         for i, (original_link, resolved_link) in enumerate(zip(chat_links, resolved_links), 1):
             logger.info(f"🔍 Analyzing chat {i}/{len(chat_links)}")
             logger.info(f"   Original: {original_link}")
@@ -266,8 +347,12 @@ async def main():
             
             result = await analyze_single_chat(resolved_link)
             if result:
-                all_results.append(result)
-                logger.info(f"✅ Chat {i} completed successfully")
+                if result.get('scan_status') == ScanStatus.SKIPPED:
+                    skipped_results.append(result)
+                    logger.info(f"⏭️ Chat {i} skipped: {result.get('skip_reason', 'unknown')}")
+                else:
+                    all_results.append(result)
+                    logger.info(f"✅ Chat {i} completed successfully")
             else:
                 logger.error(f"❌ Chat {i} failed")
             
@@ -275,8 +360,30 @@ async def main():
             if i < len(chat_links):
                 await asyncio.sleep(2)
         
+        # نمایش آمار کلی
+        total_processed = len(all_results)
+        total_skipped = len(skipped_results)
+        total_failed = len(chat_links) - total_processed - total_skipped
+        
+        # شمارش کانال‌ها و سایر چت‌های ذخیره شده
+        saved_channels = 0
+        saved_other_chats = 0
+        for result in skipped_results:
+            if result.get('skip_reason') == 'channel_detected':
+                saved_channels += 1
+            elif result.get('skip_reason') == 'non_group_chat':
+                saved_other_chats += 1
+        
+        logger.info(f"📊 Analysis Summary:")
+        logger.info(f"   ✅ Successfully processed: {total_processed} groups")
+        logger.info(f"   📢 Channels saved to DB: {saved_channels}")
+        logger.info(f"   📝 Other chats saved to DB: {saved_other_chats}")
+        logger.info(f"   ⏭️ Total skipped: {total_skipped}")
+        logger.info(f"   ❌ Failed: {total_failed}")
+        logger.info(f"   📋 Total links: {len(chat_links)}")
+        
         # ذخیره نتایج کلی
-        if all_results:
+        if all_results or skipped_results:
             import json
             results_file = Path(ANALYSIS_CONFIG.results_dir) / ANALYSIS_CONFIG.output_file
             # اطمینان از وجود پوشه والد
@@ -298,12 +405,26 @@ async def main():
                 logger.info(f"🔗 All extracted links saved to: {combined_links_file}")
                 logger.info(f"   📊 Total unique links found: {len(all_extracted_links)}")
             
+            # جمع‌آوری آمار کاربران
+            total_users = 0
+            total_messages = 0
+            for result in all_results:
+                if result.get('analysis_results'):
+                    total_messages += result['analysis_results'].get('total_messages', 0)
+                if 'stats' in result:
+                    total_users += result['stats'].get('total_users', 0)
+            
             summary = {
                 'total_chats': len(all_results),
-                'total_messages': sum(len(r.get('analysis_results', {}).get('messages', [])) for r in all_results),
-                'total_users': sum(r.get('stats', {}).get('total_users', 0) for r in all_results),
+                'total_skipped': len(skipped_results),
+                'total_failed': total_failed,
+                'saved_channels': saved_channels,
+                'saved_other_chats': saved_other_chats,
+                'total_messages': total_messages,
+                'total_users': total_users,
                 'total_extracted_links': len(all_extracted_links),
-                'results': all_results,
+                'processed_results': all_results,
+                'skipped_results': skipped_results,
                 'settings': {
                     'message_limit': MESSAGE_SETTINGS.limit,
                     'member_limit': MEMBER_SETTINGS.member_limit,
@@ -315,8 +436,15 @@ async def main():
                 json.dump(summary, f, ensure_ascii=False, indent=2, default=str)
             
             logger.info(f"💾 Results saved to: {results_file}")
-            logger.info(f"✅ Analysis completed! Processed {len(all_results)} chats")
-            logger.info(f"🔗 Total extracted links: {len(all_extracted_links)}")
+            logger.info(f"✅ Analysis completed!")
+            logger.info(f"   📊 Processed {total_processed} groups")
+            logger.info(f"   📢 Saved {saved_channels} channels to DB")
+            logger.info(f"   📝 Saved {saved_other_chats} other chats to DB")
+            logger.info(f"   🔗 Total extracted links: {len(all_extracted_links)}")
+            logger.info(f"   👤 Total users extracted: {total_users}")
+            logger.info(f"   💬 Total messages processed: {total_messages}")
+        else:
+            logger.warning("⚠️ No results to save - all chats were skipped or failed")
         
     except KeyboardInterrupt:
         logger.info("⏹️ Analysis stopped by user")

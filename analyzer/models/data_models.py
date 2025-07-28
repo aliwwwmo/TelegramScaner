@@ -15,6 +15,7 @@ class ScanStatus(Enum):
     SUCCESS = "success"
     FAILED = "failed"
     PARTIAL = "partial"
+    SKIPPED = "skipped"
 
 @dataclass
 class LinkInfo:
