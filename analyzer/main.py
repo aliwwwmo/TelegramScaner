@@ -6,13 +6,15 @@ from pathlib import Path
 # اضافه کردن مسیر ریشه پروژه
 sys.path.append(str(Path(__file__).parent.parent))
 
-from config.settings import TELEGRAM_CONFIG, ANALYSIS_CONFIG, MESSAGE_SETTINGS, MEMBER_SETTINGS
+from config.settings import TELEGRAM_CONFIG, ANALYSIS_CONFIG, MESSAGE_SETTINGS, MEMBER_SETTINGS, MONGO_CONFIG, FILTER_SETTINGS
 from services.telegram_client import TelegramClientManager
 from services.user_tracker import UserTracker
 from services.chat_analyzer import ChatAnalyzer
 from services.message_analyzer import MessageAnalyzer
 from services.link_analyzer import LinkAnalyzer
 from services.url_resolver import URLResolver
+from services.mongo_service import MongoServiceManager
+from models.data_models import GroupInfo, ChatType, ScanStatus
 from utils.logger import logger
 
 async def resolve_and_validate_link(chat_link: str) -> str:
@@ -48,100 +50,175 @@ async def analyze_single_chat(chat_link: str):
     # حل کردن و اعتبارسنجی لینک
     resolved_link = await resolve_and_validate_link(chat_link)
     
+    # ایجاد اطلاعات پایه گروه
+    group_info = None
+    scan_status = ScanStatus.FAILED
+    last_message_id = None
+    start_message_id = None
+    
     async with TelegramClientManager(TELEGRAM_CONFIG) as client:
-        # تحلیل کامل چت
-        chat, messages, members = await client.analyze_chat_complete(resolved_link)
-        
-        if not chat:
-            logger.error(f"❌ Could not access chat: {resolved_link}")
-            return None
-        
-        # آماده سازی tracker و analyzer
-        user_tracker = UserTracker()
-        link_analyzer = LinkAnalyzer()
-        message_analyzer = MessageAnalyzer(client.client, link_analyzer)
-        
-        # اطلاعات چت
-        chat_info = {
-            'id': chat.id,
-            'title': chat.title,
-            'username': getattr(chat, 'username', None),
-            'type': str(chat.type),
-            'members_count': getattr(chat, 'members_count', 0),
-            'description': getattr(chat, 'description', ''),
-            'link': resolved_link,
-            'original_link': chat_link if chat_link != resolved_link else None
-        }
-        
-        logger.info(f"📊 Chat Info: {chat_info['title']} ({chat_info['members_count']} members)")
-        
-        # پردازش پیام‌ها
-        if messages:
-            logger.info(f"📝 Processing {len(messages)} messages...")
-            for message in messages:
-                user_tracker.process_message(message, chat_info)
-                # همچنین با message_analyzer پردازش کنیم
-                await message_analyzer.process_user_message(message, str(chat.id), chat.title)
+        try:
+            # تحلیل کامل چت
+            chat, messages, members = await client.analyze_chat_complete(resolved_link)
             
-            # تحلیل پیام‌ها - ایجاد یک تحلیل ساده
-            analysis_results = {
-                'total_messages': len(messages),
-                'messages': [],
-                'users_analyzed': len(message_analyzer.processed_users)
+            if not chat:
+                logger.error(f"❌ Could not access chat: {resolved_link}")
+                return None
+            
+            # تعیین نوع چت
+            chat_type = ChatType.GROUP
+            if hasattr(chat, 'type'):
+                if str(chat.type) == 'ChatType.CHANNEL':
+                    chat_type = ChatType.CHANNEL
+                elif str(chat.type) == 'ChatType.SUPERGROUP':
+                    chat_type = ChatType.SUPERGROUP
+                elif str(chat.type) == 'ChatType.PRIVATE':
+                    chat_type = ChatType.PRIVATE
+            
+            # تعیین public/private بودن
+            is_public = bool(getattr(chat, 'username', None))
+            
+            # ایجاد اطلاعات گروه
+            group_info = GroupInfo(
+                chat_id=chat.id,
+                username=getattr(chat, 'username', None),
+                link=resolved_link,
+                chat_type=chat_type,
+                is_public=is_public
+            )
+            
+            # آماده سازی tracker و analyzer
+            user_tracker = UserTracker()
+            link_analyzer = LinkAnalyzer()
+            message_analyzer = MessageAnalyzer(client.client, link_analyzer)
+            
+            # اطلاعات چت
+            chat_info = {
+                'id': chat.id,
+                'title': chat.title,
+                'username': getattr(chat, 'username', None),
+                'type': str(chat.type),
+                'members_count': getattr(chat, 'members_count', 0),
+                'description': getattr(chat, 'description', ''),
+                'link': resolved_link,
+                'original_link': chat_link if chat_link != resolved_link else None
             }
-        else:
-            logger.info("📝 No messages to process")
-            analysis_results = {}
-        
-        # پردازش اعضا (اگر دریافت شده باشند)
-        if members:
-            logger.info(f"👥 Processing {len(members)} members...")
-            if hasattr(members[0], 'user'):  # اگر ChatMember objects هستند
-                for member in members:
-                    user_tracker.add_user_from_member(member, chat_info)
-            else:  # اگر User objects هستند
-                for user in members:
-                    user_tracker.add_user_direct(user, chat_info)
-        
-        # ذخیره نتایج
-        results_file = Path(ANALYSIS_CONFIG.results_dir) / ANALYSIS_CONFIG.output_file
-        # اطمینان از وجود پوشه والد
-        results_file.parent.mkdir(parents=True, exist_ok=True)
-        
-        # ذخیره لینک‌های استخراج شده
-        if message_analyzer.extracted_links:
-            links_file = Path(ANALYSIS_CONFIG.results_dir) / "extracted_links.txt"
-            links_file.parent.mkdir(parents=True, exist_ok=True)
             
-            with open(links_file, "w", encoding="utf-8") as f:
-                for link in sorted(message_analyzer.extracted_links):
-                    f.write(f"{link}\n")
+            logger.info(f"📊 Chat Info: {chat_info['title']} ({chat_info['members_count']} members)")
             
-            logger.info(f"🔗 Extracted links saved to: {links_file}")
-            logger.info(f"   📊 Total extracted links: {len(message_analyzer.extracted_links)}")
+            # پردازش پیام‌ها
+            if messages:
+                logger.info(f"📝 Processing {len(messages)} messages...")
+                
+                # ذخیره اطلاعات آخرین پیام
+                last_message = messages[0]  # جدیدترین پیام
+                last_message_id = last_message.id
+                
+                # ذخیره ID پیام شروع اسکن (قدیمی‌ترین پیام در لیست)
+                if messages:
+                    start_message_id = messages[-1].id  # قدیمی‌ترین پیام
+                
+                # فیلتر کردن پیام‌های اسکن
+                filtered_messages = []
+                for message in messages:
+                    # بررسی اینکه آیا پیام باید رد شود
+                    should_skip = False
+                    if message.text and FILTER_SETTINGS.filter_scan_messages:
+                        text_lower = message.text.lower().strip()
+                        # فیلتر کردن پیام‌های مربوط به شروع اسکن
+                        if any(keyword in text_lower for keyword in FILTER_SETTINGS.scan_keywords):
+                            logger.info(f"⏭️ Skipping scan start message: {message.id}")
+                            should_skip = True
+                    
+                    if not should_skip:
+                        filtered_messages.append(message)
+                
+                logger.info(f"📝 Filtered {len(messages)} messages to {len(filtered_messages)} messages")
+                
+                for message in filtered_messages:
+                    user_tracker.process_message(message, chat_info)
+                    # همچنین با message_analyzer پردازش کنیم
+                    await message_analyzer.process_user_message(message, str(chat.id), chat.title)
+                
+                # تحلیل پیام‌ها - ایجاد یک تحلیل ساده
+                analysis_results = {
+                    'total_messages': len(filtered_messages),
+                    'messages': [],
+                    'users_analyzed': len(message_analyzer.processed_users)
+                }
+                
+                scan_status = ScanStatus.SUCCESS
+            else:
+                logger.info("📝 No messages to process")
+                analysis_results = {}
+                scan_status = ScanStatus.PARTIAL
+            
+            # پردازش اعضا (اگر دریافت شده باشند)
+            if members:
+                logger.info(f"👥 Processing {len(members)} members...")
+                if hasattr(members[0], 'user'):  # اگر ChatMember objects هستند
+                    for member in members:
+                        user_tracker.add_user_from_member(member, chat_info)
+                else:  # اگر User objects هستند
+                    for user in members:
+                        user_tracker.add_user_direct(user, chat_info)
+            
+            # ذخیره نتایج
+            results_file = Path(ANALYSIS_CONFIG.results_dir) / ANALYSIS_CONFIG.output_file
+            # اطمینان از وجود پوشه والد
+            results_file.parent.mkdir(parents=True, exist_ok=True)
+            
+            # ذخیره لینک‌های استخراج شده
+            if message_analyzer.extracted_links:
+                links_file = Path(ANALYSIS_CONFIG.results_dir) / "extracted_links.txt"
+                links_file.parent.mkdir(parents=True, exist_ok=True)
+                
+                with open(links_file, "w", encoding="utf-8") as f:
+                    for link in sorted(message_analyzer.extracted_links):
+                        f.write(f"{link}\n")
+                
+                logger.info(f"🔗 Extracted links saved to: {links_file}")
+                logger.info(f"   📊 Total extracted links: {len(message_analyzer.extracted_links)}")
+            
+            # ذخیره کاربران به تلگرام
+            users_saved = await user_tracker.save_all_users_to_telegram()
+            
+            # آمار نهایی
+            stats = user_tracker.get_stats()
+            logger.info(f"📊 Final Statistics:")
+            logger.info(f"   💬 Messages processed: {len(messages)}")
+            logger.info(f"   👥 Members found: {len(members)}")
+            logger.info(f"   👤 Unique users: {stats['total_users']}")
+            logger.info(f"   🤖 Bots: {stats['bot_users']}")
+            logger.info(f"   ❌ Deleted: {stats['deleted_users']}")
+            logger.info(f"   ✅ Active: {stats['active_users']}")
+            logger.info(f"   💾 Users saved: {users_saved}")
+            logger.info(f"   🔗 Extracted links: {len(message_analyzer.extracted_links)}")
+            
+        except Exception as e:
+            logger.error(f"❌ Error during analysis: {e}")
+            scan_status = ScanStatus.FAILED
         
-        # ذخیره کاربران به تلگرام
-        users_saved = await user_tracker.save_all_users_to_telegram()
-        
-        # آمار نهایی
-        stats = user_tracker.get_stats()
-        logger.info(f"📊 Final Statistics:")
-        logger.info(f"   💬 Messages processed: {len(messages)}")
-        logger.info(f"   👥 Members found: {len(members)}")
-        logger.info(f"   👤 Unique users: {stats['total_users']}")
-        logger.info(f"   🤖 Bots: {stats['bot_users']}")
-        logger.info(f"   ❌ Deleted: {stats['deleted_users']}")
-        logger.info(f"   ✅ Active: {stats['active_users']}")
-        logger.info(f"   💾 Users saved: {users_saved}")
-        logger.info(f"   🔗 Extracted links: {len(message_analyzer.extracted_links)}")
+        # به‌روزرسانی اطلاعات اسکن
+        if group_info:
+            group_info.update_scan_info(
+                message_id=last_message_id,
+                start_message_id=start_message_id,
+                status=scan_status
+            )
+            
+            # ذخیره در MongoDB
+            async with MongoServiceManager() as mongo_service:
+                if await mongo_service.save_group_info(group_info):
+                    logger.info(f"✅ Group info saved to MongoDB: {group_info.chat_id}")
+                else:
+                    logger.error(f"❌ Failed to save group info to MongoDB: {group_info.chat_id}")
         
         return {
-            'chat_info': chat_info,
-            'stats': stats,
-            'analysis': analysis_results,
-            'users_saved': users_saved,
-            'extracted_links': list(message_analyzer.extracted_links),
-            'extracted_links_count': len(message_analyzer.extracted_links)
+            'chat_info': chat_info if 'chat_info' in locals() else None,
+            'analysis_results': analysis_results if 'analysis_results' in locals() else None,
+            'group_info': group_info,
+            'scan_status': scan_status
         }
 
 async def main():
@@ -223,8 +300,8 @@ async def main():
             
             summary = {
                 'total_chats': len(all_results),
-                'total_messages': sum(len(r.get('analysis', {}).get('messages', [])) for r in all_results),
-                'total_users': sum(r['stats']['total_users'] for r in all_results),
+                'total_messages': sum(len(r.get('analysis_results', {}).get('messages', [])) for r in all_results),
+                'total_users': sum(r.get('stats', {}).get('total_users', 0) for r in all_results),
                 'total_extracted_links': len(all_extracted_links),
                 'results': all_results,
                 'settings': {

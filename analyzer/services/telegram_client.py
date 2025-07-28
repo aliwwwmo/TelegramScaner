@@ -2,7 +2,7 @@ import asyncio
 from typing import Optional, List
 from pyrogram import Client
 from pyrogram.errors import FloodWait, ChatAdminRequired, ChannelPrivate
-from config.settings import TelegramConfig, MESSAGE_SETTINGS, MEMBER_SETTINGS
+from config.settings import TelegramConfig, MESSAGE_SETTINGS, MEMBER_SETTINGS, FILTER_SETTINGS
 from utils.logger import logger
 
 class TelegramClientManager:
@@ -155,31 +155,41 @@ class TelegramClientManager:
             delay = MESSAGE_SETTINGS.delay_between_batches
             
             if limit == 0:
-                logger.info("� Message fetching disabled (limit=0)")
+                logger.info("📝 Message fetching disabled (limit=0)")
                 return []
             
-            logger.info(f"� Getting messages from chat {chat_id} (limit: {limit})")
+            logger.info(f"📝 Getting messages from chat {chat_id} (limit: {limit})")
             
             messages = []
             collected = 0
             
             async for message in self.client.get_chat_history(chat_id, limit=limit):
-                messages.append(message)
-                collected += 1
+                # فیلتر کردن پیام‌های اسکن
+                should_skip = False
+                if message.text and FILTER_SETTINGS.filter_scan_messages:
+                    text_lower = message.text.lower().strip()
+                    # فیلتر کردن پیام‌های مربوط به شروع اسکن
+                    if any(keyword in text_lower for keyword in FILTER_SETTINGS.scan_keywords):
+                        logger.info(f"⏭️ Skipping scan start message during collection: {message.id}")
+                        should_skip = True
                 
-                # نمایش پیشرفت هر batch_size پیام
-                if collected % batch_size == 0:
-                    logger.info(f"� Collected {collected}/{limit} messages...")
+                if not should_skip:
+                    messages.append(message)
+                    collected += 1
                     
-                    # تاخیر بین batch ها
-                    if delay > 0 and collected < limit:
-                        await asyncio.sleep(delay)
-                
-                # بررسی رسیدن به حد مطلوب
-                if collected >= limit:
-                    break
+                    # نمایش پیشرفت هر batch_size پیام
+                    if collected % batch_size == 0:
+                        logger.info(f"📝 Collected {collected}/{limit} messages...")
+                        
+                        # تاخیر بین batch ها
+                        if delay > 0 and collected < limit:
+                            await asyncio.sleep(delay)
+                    
+                    # بررسی رسیدن به حد مطلوب
+                    if collected >= limit:
+                        break
             
-            logger.info(f"✅ Successfully collected {len(messages)} messages")
+            logger.info(f"✅ Successfully collected {len(messages)} messages (filtered)")
             return messages
             
         except FloodWait as e:

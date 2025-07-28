@@ -157,6 +157,54 @@ class FileSettings:
         )
 
 @dataclass
+class FilterSettings:
+    """تنظیمات فیلتر پیام‌ها"""
+    filter_scan_messages: bool
+    filter_bot_messages: bool
+    filter_system_messages: bool
+    scan_keywords: list
+    bot_keywords: list
+    
+    @classmethod
+    def from_env(cls) -> 'FilterSettings':
+        return cls(
+            filter_scan_messages=str_to_bool(os.getenv('FILTER_SCAN_MESSAGES', 'true')),
+            filter_bot_messages=str_to_bool(os.getenv('FILTER_BOT_MESSAGES', 'true')),
+            filter_system_messages=str_to_bool(os.getenv('FILTER_SYSTEM_MESSAGES', 'true')),
+            scan_keywords=[
+                'scan_start_message',
+                'scan start',
+                'اسکن شروع',
+                'شروع اسکن',
+                'scanning started',
+                'scan initiated'
+            ],
+            bot_keywords=[
+                'bot',
+                'system',
+                'automated',
+                'scan',
+                'analysis'
+            ]
+        )
+
+@dataclass
+class MongoConfig:
+    """تنظیمات MongoDB"""
+    connection_string: str
+    database_name: str
+    collection_name: str
+    
+    @classmethod
+    def from_env(cls) -> 'MongoConfig':
+        """بارگذاری تنظیمات MongoDB از متغیرهای محیطی"""
+        return cls(
+            connection_string=os.getenv('MONGO_CONNECTION_STRING', 'mongodb://localhost:27017/'),
+            database_name=os.getenv('MONGO_DATABASE', 'telegram_scanner'),
+            collection_name=os.getenv('MONGO_COLLECTION', 'groups')
+        )
+
+@dataclass
 class AnalysisConfig:
     """تنظیمات تحلیل (سازگاری با کد قبلی)"""
     input_file: str
@@ -222,6 +270,8 @@ MEMBER_SETTINGS = MemberSettings.from_env()
 ANALYSIS_SETTINGS = AnalysisSettings.from_env()
 FILE_SETTINGS = FileSettings.from_env()
 ANALYSIS_CONFIG = AnalysisConfig.from_env()
+MONGO_CONFIG = MongoConfig.from_env()
+FILTER_SETTINGS = FilterSettings.from_env()
 
 # برای سازگاری با کد قبلی
 telegram_config = TELEGRAM_CONFIG

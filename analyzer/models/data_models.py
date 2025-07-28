@@ -1,6 +1,20 @@
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set
+from dataclasses import dataclass, asdict
 from datetime import datetime
+from typing import Optional, Dict, Any
+from enum import Enum
+
+class ChatType(Enum):
+    """نوع چت"""
+    CHANNEL = "channel"
+    GROUP = "group"
+    SUPERGROUP = "supergroup"
+    PRIVATE = "private"
+
+class ScanStatus(Enum):
+    """وضعیت اسکن"""
+    SUCCESS = "success"
+    FAILED = "failed"
+    PARTIAL = "partial"
 
 @dataclass
 class LinkInfo:
@@ -13,65 +27,64 @@ class LinkInfo:
     redirect_source: str = ""
 
 @dataclass
-class ChatAnalysisResult:
-    """نتیجه تحلیل چت"""
-    link: str
-    type: str = "unknown"
-    status: str = "unknown"
-    title: str = ""
-    username: str = ""
-    members_count: int = 0
-    chat_id: Optional[int] = None
-    error: Optional[str] = None
-    link_category: str = ""
-    is_channel: bool = False
-    is_group: bool = False
-    is_public: bool = False
-    is_redirect: bool = False
-    redirect_source: str = ""
-    invite_hash: str = ""
-    can_join: bool = False
-
-@dataclass
-class MessageData:
-    """داده‌های پیام"""
-    group_id: str
-    message_id: int
-    text: str
-    timestamp: str
-    reactions: List[str] = field(default_factory=list)
-    reply_to: Optional[int] = None
-    edited: bool = False
-    is_forwarded: bool = False
-    message_link: str = ""  # لینک پیام تلگرام
-
-@dataclass
 class GroupInfo:
-    """اطلاعات گروه"""
-    group_id: str
-    group_title: str
-    joined_at: str
-    role: str = "member"
-    is_admin: bool = False
-
-@dataclass
-class UserData:
-    """داده‌های کاربر"""
-    user_id: int
-    current_username: Optional[str] = None
-    current_name: str = ""
-    username_history: List[Dict] = field(default_factory=list)
-    name_history: List[Dict] = field(default_factory=list)
-    is_bot: bool = False
-    is_deleted: bool = False
-    joined_groups: List[GroupInfo] = field(default_factory=list)
-    messages: List[MessageData] = field(default_factory=list)
-
-@dataclass
-class AnalysisResults:
-    """نتایج کلی تحلیل"""
-    chat_analysis_results: List[ChatAnalysisResult] = field(default_factory=list)
-    extracted_links: Set[str] = field(default_factory=set)
-    processed_users: Dict[int, UserData] = field(default_factory=dict)
-    redirect_mapping: Dict[str, str] = field(default_factory=dict)
-    analysis_date: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    """اطلاعات پایه گروه/کانال برای ذخیره در MongoDB"""
+    chat_id: int
+    username: Optional[str] = None
+    link: Optional[str] = None
+    chat_type: ChatType = ChatType.GROUP
+    is_public: bool = True
+    last_scan_time: Optional[datetime] = None
+    last_message_id: Optional[int] = None
+    start_message_id: Optional[int] = None  # ID پیامی که اسکن شروع می‌شود
+    last_scan_status: ScanStatus = ScanStatus.FAILED
+    scan_count: int = 0
+    created_at: datetime = None
+    updated_at: datetime = None
+    
+    def __post_init__(self):
+        if self.created_at is None:
+            self.created_at = datetime.utcnow()
+        if self.updated_at is None:
+            self.updated_at = datetime.utcnow()
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """تبدیل به دیکشنری برای ذخیره در MongoDB"""
+        data = asdict(self)
+        data['chat_type'] = self.chat_type.value
+        data['last_scan_status'] = self.last_scan_status.value
+        return data
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'GroupInfo':
+        """ایجاد از دیکشنری MongoDB"""
+        # تبدیل enum strings به enum objects
+        if 'chat_type' in data and isinstance(data['chat_type'], str):
+            data['chat_type'] = ChatType(data['chat_type'])
+        if 'last_scan_status' in data and isinstance(data['last_scan_status'], str):
+            data['last_scan_status'] = ScanStatus(data['last_scan_status'])
+        
+        # تبدیل datetime strings به datetime objects
+        for field in ['last_scan_time', 'created_at', 'updated_at']:
+            if field in data and isinstance(data[field], str):
+                try:
+                    data[field] = datetime.fromisoformat(data[field].replace('Z', '+00:00'))
+                except:
+                    data[field] = None
+        
+        return cls(**data)
+    
+    def update_scan_info(self, message_id: Optional[int] = None, 
+                        start_message_id: Optional[int] = None,
+                        status: ScanStatus = ScanStatus.SUCCESS):
+        """به‌روزرسانی اطلاعات اسکن"""
+        self.last_scan_time = datetime.utcnow()
+        self.last_scan_status = status
+        self.scan_count += 1
+        self.updated_at = datetime.utcnow()
+        
+        if message_id is not None:
+            self.last_message_id = message_id
+        
+        if start_message_id is not None:
+            self.start_message_id = start_message_id

@@ -3,7 +3,6 @@ import os
 from datetime import datetime
 from typing import Dict, List, Set
 
-from models.data_models import ChatAnalysisResult, UserData, AnalysisResults
 from config.settings import AnalysisConfig
 from utils.logger import logger
 
@@ -20,25 +19,25 @@ class FileManager:
         os.makedirs(self.config.users_dir, exist_ok=True)
         os.makedirs("logs", exist_ok=True)
     
-    def save_results_to_files(self, results: AnalysisResults):
+    def save_results_to_files(self, results: Dict):
         """ذخیره نتایج در فایل‌ها"""
         logger.info("💾 Saving results to files...")
         
-        # 1. ذخیره تحلیل چت‌ها با جزئیات بیشتر
+        # 1. ذخیره تحلیل چت‌ها
         detailed_analysis = {
             "analysis_metadata": {
-                "total_links": len(results.chat_analysis_results),
-                "analysis_date": results.analysis_date,
+                "total_links": len(results.get('chat_analysis_results', [])),
+                "analysis_date": datetime.utcnow().isoformat(),
                 "link_categories": {}
             },
-            "redirect_mappings": results.redirect_mapping,
-            "chats": [self._chat_result_to_dict(chat) for chat in results.chat_analysis_results]
+            "redirect_mappings": results.get('redirect_mapping', {}),
+            "chats": results.get('chat_analysis_results', [])
         }
         
         # آمار دسته‌بندی لینک‌ها
         categories = {}
-        for chat in results.chat_analysis_results:
-            category = chat.link_category or "unknown"
+        for chat in results.get('chat_analysis_results', []):
+            category = chat.get('link_category', 'unknown')
             categories[category] = categories.get(category, 0) + 1
         
         detailed_analysis["analysis_metadata"]["link_categories"] = categories
@@ -47,20 +46,22 @@ class FileManager:
             json.dump(detailed_analysis, f, ensure_ascii=False, indent=2)
         
         # 2. ذخیره لینک‌های استخراج شده
+        extracted_links = results.get('extracted_links', [])
         with open(f"{self.config.results_dir}/extracted_links.txt", "w", encoding="utf-8") as f:
-            for link in sorted(results.extracted_links):
+            for link in sorted(extracted_links):
                 f.write(f"{link}\n")
         
         # 3. ذخیره تمام لینک‌ها در فایل JSON هم
         with open(f"{self.config.results_dir}/extracted_links.json", "w", encoding="utf-8") as f:
-            json.dump(list(sorted(results.extracted_links)), f, ensure_ascii=False, indent=2)
+            json.dump(list(sorted(extracted_links)), f, ensure_ascii=False, indent=2)
         
         # 4. ذخیره اطلاعات کاربران در فایل‌های JSON جداگانه
-        for user_id, user_data in results.processed_users.items():
+        processed_users = results.get('processed_users', {})
+        for user_id, user_data in processed_users.items():
             user_filename = f"{self.config.users_dir}/user_{user_id}.json"
             
             with open(user_filename, "w", encoding="utf-8") as f:
-                json.dump(self._user_data_to_dict(user_data), f, ensure_ascii=False, indent=2)
+                json.dump(user_data, f, ensure_ascii=False, indent=2)
         
         # 5. ذخیره خلاصه کلی
         summary = self._create_summary(results, categories)
@@ -73,149 +74,72 @@ class FileManager:
             json.dump(summary, f, ensure_ascii=False, indent=2)
         
         # 7. آمار نهایی
-        self._log_final_stats(summary, categories, len(results.processed_users), len(results.extracted_links))
+        self._log_final_stats(summary, categories, len(processed_users), len(extracted_links))
     
-    def _chat_result_to_dict(self, chat: ChatAnalysisResult) -> Dict:
-        """تبدیل ChatAnalysisResult به dictionary"""
-        return {
-            "link": chat.link,
-            "type": chat.type,
-            "status": chat.status,
-            "title": chat.title,
-            "username": chat.username,
-            "members_count": chat.members_count,
-            "chat_id": chat.chat_id,
-            "error": chat.error,
-            "link_category": chat.link_category,
-            "is_channel": chat.is_channel,
-            "is_group": chat.is_group,
-            "is_public": chat.is_public,
-            "is_redirect": chat.is_redirect,
-            "redirect_source": chat.redirect_source,
-            "invite_hash": chat.invite_hash,
-            "can_join": chat.can_join
-        }
-    
-    def _user_data_to_dict(self, user: UserData) -> Dict:
-        """تبدیل UserData به dictionary"""
-        return {
-            "user_id": user.user_id,
-            "current_username": user.current_username,
-            "current_name": user.current_name,
-            "username_history": user.username_history,
-            "name_history": user.name_history,
-            "is_bot": user.is_bot,
-            "is_deleted": user.is_deleted,
-            "joined_groups": [
-                {
-                    "group_id": group.group_id,
-                    "group_title": group.group_title,
-                    "joined_at": group.joined_at,
-                    "role": group.role,
-                    "is_admin": group.is_admin
-                } for group in user.joined_groups
-            ],
-            "messages": [
-                {
-                    "group_id": msg.group_id,
-                    "message_id": msg.message_id,
-                    "text": msg.text,
-                    "timestamp": msg.timestamp,
-                    "reactions": msg.reactions,
-                    "reply_to": msg.reply_to,
-                    "edited": msg.edited,
-                    "is_forwarded": msg.is_forwarded
-                } for msg in user.messages
-            ]
-        }
-    
-    def _create_summary(self, results: AnalysisResults, categories: Dict) -> Dict:
+    def _create_summary(self, results: Dict, categories: Dict) -> Dict:
         """ایجاد خلاصه نتایج"""
-        summary = {
-            "analysis_info": {
-                "total_chats_analyzed": len(results.chat_analysis_results),
-                "accessible_chats": len([c for c in results.chat_analysis_results if c.status in ["public", "accessible"]]),
-                "private_chats": len([c for c in results.chat_analysis_results if c.status == "private"]),
-                "invalid_chats": len([c for c in results.chat_analysis_results if c.status == "invalid"]),
-                "expired_invites": len([c for c in results.chat_analysis_results if c.status == "expired"]),
-                "redirect_links": len([c for c in results.chat_analysis_results if c.is_redirect]),
-                "total_users": len(results.processed_users),
-                "total_extracted_links": len(results.extracted_links),
-                "analysis_date": results.analysis_date
+        return {
+            "summary": {
+                "total_chats": len(results.get('chat_analysis_results', [])),
+                "total_users": len(results.get('processed_users', {})),
+                "total_extracted_links": len(results.get('extracted_links', [])),
+                "analysis_date": datetime.utcnow().isoformat()
             },
-            "chat_types": {
-                "channels": len([c for c in results.chat_analysis_results if c.is_channel]),
-                "groups": len([c for c in results.chat_analysis_results if c.is_group]),
-                "invite_links": len([c for c in results.chat_analysis_results if c.link_category == "invite_link"]),
-                "public_links": len([c for c in results.chat_analysis_results if c.link_category == "public_link"]),
-                "public_chats": len([c for c in results.chat_analysis_results if c.is_public]),
-                "unknown": len([c for c in results.chat_analysis_results if c.type == "unknown"])
-            },
-            "link_categories": categories,
-            "user_statistics": {}
+            "categories": categories,
+            "chat_results": results.get('chat_analysis_results', []),
+            "extracted_links": list(results.get('extracted_links', []))
         }
-        
-        # آمار کاربران
-        for user_id, user_data in results.processed_users.items():
-            summary["user_statistics"][str(user_id)] = {
-                "username": user_data.current_username,
-                "name": user_data.current_name,
-                "total_messages": len(user_data.messages),
-                "joined_groups_count": len(user_data.joined_groups),
-                "is_bot": user_data.is_bot
-            }
-        
-        return summary
     
     def _log_final_stats(self, summary: Dict, categories: Dict, users_count: int, links_count: int):
         """نمایش آمار نهایی"""
-        logger.info("📊 Analysis Results:")
-        logger.info(f"   • Total links: {summary['analysis_info']['total_chats_analyzed']}")
-        logger.info(f"   • Accessible chats: {summary['analysis_info']['accessible_chats']}")
-        logger.info(f"   • Private chats: {summary['analysis_info']['private_chats']}")
-        logger.info(f"   • Invalid/expired: {summary['analysis_info']['invalid_chats'] + summary['analysis_info']['expired_invites']}")
-        logger.info(f"   • Redirect links resolved: {summary['analysis_info']['redirect_links']}")
-        logger.info(f"   • Total users: {users_count}")
-        logger.info(f"   • Extracted links: {links_count}")
+        logger.info("📊 Final Analysis Statistics:")
+        logger.info(f"   📈 Total chats analyzed: {summary['summary']['total_chats']}")
+        logger.info(f"   👥 Total users found: {users_count}")
+        logger.info(f"   🔗 Total links extracted: {links_count}")
         
-        # آمار دسته‌بندی
-        logger.info("📋 Link Categories:")
-        for category, count in categories.items():
-            logger.info(f"   • {category}: {count}")
+        if categories:
+            logger.info("   📋 Link Categories:")
+            for category, count in categories.items():
+                logger.info(f"      • {category}: {count}")
     
     def load_links_from_file(self) -> List[str]:
         """بارگذاری لینک‌ها از فایل"""
-        if not os.path.exists(self.config.links_file):
-            logger.error(f"❌ Links file not found: {self.config.links_file}")
+        links_file = self.config.links_file
+        
+        if not os.path.exists(links_file):
+            logger.warning(f"⚠️ Links file not found: {links_file}")
             self._create_sample_links_file()
             return []
         
-        chat_links = []
         try:
-            with open(self.config.links_file, 'r', encoding='utf-8') as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith('#'):
-                        chat_links.append(line)
+            with open(links_file, "r", encoding="utf-8") as f:
+                lines = f.readlines()
             
-            if not chat_links:
-                logger.error("❌ No valid links found in links.txt")
-                return []
-                
-            logger.info(f"📋 Loaded {len(chat_links)} links from {self.config.links_file}")
-            return chat_links
+            # حذف خطوط خالی و کامنت‌ها
+            links = []
+            for line in lines:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    links.append(line)
+            
+            logger.info(f"✅ Loaded {len(links)} links from {links_file}")
+            return links
             
         except Exception as e:
-            logger.error(f"❌ Error reading links file: {e}")
+            logger.error(f"❌ Error loading links from {links_file}: {e}")
             return []
     
     def _create_sample_links_file(self):
         """ایجاد فایل نمونه لینک‌ها"""
-        print(f"Creating sample {self.config.links_file} file...")
-        with open(self.config.links_file, 'w', encoding='utf-8') as f:
-            f.write("# Add your Telegram links here, one per line\n")
-            f.write("# Examples:\n")
-            f.write("# https://t.me/joinchat/abc123\n")
-            f.write("# https://t.me/channelname\n")
-            f.write("# @username\n")
-        print(f"✅ Created {self.config.links_file}. Please add your links and run again.")
+        try:
+            with open(self.config.links_file, "w", encoding="utf-8") as f:
+                f.write("# Add your Telegram chat links here, one per line\n")
+                f.write("# Examples:\n")
+                f.write("# https://t.me/example_channel\n")
+                f.write("# @example_group\n")
+                f.write("# +1234567890  (for private chats)\n")
+            
+            logger.info(f"✅ Created sample links file: {self.config.links_file}")
+            
+        except Exception as e:
+            logger.error(f"❌ Error creating sample links file: {e}")

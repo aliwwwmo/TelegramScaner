@@ -1,13 +1,14 @@
 import asyncio
 from datetime import datetime
-from typing import Dict, List
+from typing import Dict, List, Set
 
 from pyrogram import Client
 from pyrogram.types import Message
 from pyrogram.errors import FloodWait
 
-from models.data_models import UserData, MessageData, GroupInfo, ChatAnalysisResult
+from models.data_models import GroupInfo
 from services.link_analyzer import LinkAnalyzer
+from config.settings import FILTER_SETTINGS
 from utils.logger import logger
 
 class MessageAnalyzer:
@@ -16,8 +17,26 @@ class MessageAnalyzer:
     def __init__(self, client: Client, link_analyzer: LinkAnalyzer):
         self.client = client
         self.link_analyzer = link_analyzer
-        self.processed_users: Dict[int, UserData] = {}
-        self.extracted_links = set()
+        self.processed_users: Dict[int, Dict] = {}
+        self.extracted_links: Set[str] = set()
+    
+    def _should_skip_message(self, message: Message) -> bool:
+        """بررسی اینکه آیا پیام باید رد شود یا نه"""
+        # بررسی پیام‌های اسکن
+        if message.text and FILTER_SETTINGS.filter_scan_messages:
+            text_lower = message.text.lower().strip()
+            # فیلتر کردن پیام‌های مربوط به شروع اسکن
+            if any(keyword in text_lower for keyword in FILTER_SETTINGS.scan_keywords):
+                logger.info(f"⏭️ Skipping scan start message: {message.id}")
+                return True
+            
+            # فیلتر کردن پیام‌های سیستم
+            if message.from_user and message.from_user.is_bot and FILTER_SETTINGS.filter_bot_messages:
+                if any(keyword in text_lower for keyword in FILTER_SETTINGS.bot_keywords):
+                    logger.info(f"⏭️ Skipping bot/system message: {message.id}")
+                    return True
+        
+        return False
     
     def _generate_message_link(self, chat_username: str, message_id: int) -> str:
         """تولید لینک پیام تلگرام"""
@@ -38,6 +57,10 @@ class MessageAnalyzer:
     
     async def process_user_message(self, message: Message, group_id: str, group_title: str = ""):
         """پردازش پیام کاربر و ذخیره اطلاعات"""
+        # بررسی اینکه آیا پیام باید رد شود
+        if self._should_skip_message(message):
+            return
+            
         if not message.from_user:
             return
             
@@ -46,47 +69,38 @@ class MessageAnalyzer:
         
         # اگر کاربر جدید است، ایجاد رکورد اولیه
         if user_id not in self.processed_users:
-            self.processed_users[user_id] = UserData(
-                user_id=user_id,
-                current_username=user.username,
-                current_name=f"{user.first_name or ''} {user.last_name or ''}".strip(),
-                is_bot=user.is_bot or False,
-                is_deleted=user.is_deleted or False
-            )
+            self.processed_users[user_id] = {
+                'user_id': user_id,
+                'current_username': user.username,
+                'current_name': f"{user.first_name or ''} {user.last_name or ''}".strip(),
+                'is_bot': user.is_bot or False,
+                'is_deleted': user.is_deleted or False,
+                'joined_groups': [],
+                'messages': []
+            }
         
         user_data = self.processed_users[user_id]
         
         # بروزرسانی username اگر تغییر کرده
-        if user.username and user.username != user_data.current_username:
-            if user_data.current_username:
-                user_data.username_history.append({
-                    "username": user_data.current_username,
-                    "changed_at": datetime.utcnow().isoformat()
-                })
-            user_data.current_username = user.username
+        if user.username and user.username != user_data['current_username']:
+            user_data['current_username'] = user.username
         
         # بروزرسانی نام اگر تغییر کرده
         current_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
-        if current_name and current_name != user_data.current_name:
-            if user_data.current_name:
-                user_data.name_history.append({
-                    "name": user_data.current_name,
-                    "changed_at": datetime.utcnow().isoformat()
-                })
-            user_data.current_name = current_name
+        if current_name and current_name != user_data['current_name']:
+            user_data['current_name'] = current_name
         
         # اضافه کردن گروه به لیست گروه‌های عضو شده (اگر وجود نداشته باشد)
-        group_exists = any(g.group_id == group_id for g in user_data.joined_groups)
+        group_exists = any(g.get('group_id') == group_id for g in user_data['joined_groups'])
         if not group_exists:
-            group_info = GroupInfo(
-                group_id=group_id,
-                group_title=group_title,
-                joined_at=datetime.utcnow().isoformat()
-            )
-            user_data.joined_groups.append(group_info)
+            group_info = {
+                'group_id': group_id,
+                'group_title': group_title,
+                'joined_at': datetime.utcnow().isoformat()
+            }
+            user_data['joined_groups'].append(group_info)
         
         # تولید لینک پیام
-        # استخراج username از group_id یا group_title
         chat_username = ""
         if hasattr(message, 'chat') and message.chat:
             chat_username = getattr(message.chat, 'username', '')
@@ -100,70 +114,36 @@ class MessageAnalyzer:
             for reaction in message.reactions.reactions:
                 reactions.append(reaction.emoji)
         
-        message_data = MessageData(
-            group_id=group_id,
-            message_id=message.id,
-            text=message.text or message.caption or "",
-            timestamp=message.date.isoformat() if message.date else datetime.utcnow().isoformat(),
-            reactions=reactions,
-            reply_to=message.reply_to_message_id,
-            edited=bool(message.edit_date),
-            is_forwarded=bool(message.forward_date),
-            message_link=message_link  # اضافه کردن لینک پیام
-        )
+        message_data = {
+            'group_id': group_id,
+            'message_id': message_id,
+            'text': message.text or "",
+            'timestamp': message.date.isoformat(),
+            'reactions': reactions,
+            'reply_to': message.reply_to_message.id if message.reply_to_message else None,
+            'edited': message.edit_date is not None,
+            'is_forwarded': message.forward_from is not None,
+            'message_link': message_link
+        }
         
-        user_data.messages.append(message_data)
+        user_data['messages'].append(message_data)
         
         # استخراج لینک‌ها از متن پیام
-        text = message.text or message.caption or ""
-        if text:
-            links = self.link_analyzer.extract_links_from_text(text)
-            for link in links:
-                self.extracted_links.add(link)
+        if message.text:
+            links = self.link_analyzer.extract_links_from_text(message.text)
+            self.extracted_links.update(links)
     
-    async def analyze_chat_messages(self, chat_info: ChatAnalysisResult, limit: int = 1000):
-        """تحلیل پیام‌های چت و استخراج لینک‌ها"""
-        # فقط چت‌هایی که قابل دسترسی هستند
-        accessible_statuses = ["public", "accessible"]
-        if chat_info.status not in accessible_statuses or chat_info.error:
-            logger.warning(f"⏭️ Skipping chat: {chat_info.link[:50]}... - Status: {chat_info.status} - {chat_info.error or 'Not accessible'}")
-            return
+    def get_stats(self) -> Dict:
+        """دریافت آمار پردازش شده"""
+        total_users = len(self.processed_users)
+        bot_users = sum(1 for u in self.processed_users.values() if u.get('is_bot', False))
+        deleted_users = sum(1 for u in self.processed_users.values() if u.get('is_deleted', False))
+        active_users = total_users - bot_users - deleted_users
         
-        try:
-            chat_id = chat_info.chat_id
-            chat_title = chat_info.title
-            
-            if not chat_id:
-                logger.warning(f"⏭️ No chat_id for: {chat_title}")
-                return
-            
-            logger.info(f"📥 Analyzing messages in: {chat_title} (limit: {limit})")
-            
-            message_count = 0
-            async for message in self.client.get_chat_history(chat_id, limit=limit):
-                message_count += 1
-                
-                # پردازش کاربر پیام
-                await self.process_user_message(message, str(chat_id), chat_title)
-                
-                # استخراج لینک‌ها از متن پیام
-                text = message.text or message.caption or ""
-                links = self.link_analyzer.extract_links_from_text(text)
-                
-                for link in links:
-                    self.extracted_links.add(link)
-                
-                # لاگ پیشرفت
-                if message_count % 100 == 0:
-                    logger.info(f"   📊 Processed {message_count} messages...")
-                    
-                # جلوگیری از flood
-                await asyncio.sleep(0.05)
-                
-            logger.info(f"✅ Completed: {message_count} messages from {chat_title}")
-                
-        except FloodWait as e:
-            logger.warning(f"⏳ FloodWait: sleeping for {e.value} seconds")
-            await asyncio.sleep(e.value)
-        except Exception as e:
-            logger.error(f"❌ Error analyzing chat {chat_info.link}: {e}")
+        return {
+            'total_users': total_users,
+            'bot_users': bot_users,
+            'deleted_users': deleted_users,
+            'active_users': active_users,
+            'extracted_links_count': len(self.extracted_links)
+        }
