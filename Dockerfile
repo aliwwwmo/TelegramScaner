@@ -25,7 +25,7 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 # Copy requirements first for better caching
-COPY requirements.txt .
+COPY analyzer/requirements.txt .
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
@@ -57,6 +57,11 @@ ENV RESULTS_DIR="/app/results"
 ENV USERS_DIR="/app/users"
 ENV LOGS_DIR="/app/logs"
 ENV LINKS_FILE="/app/links.txt"
+
+# MongoDB default settings
+ENV MONGO_CONNECTION_STRING="mongodb://admin:password@mongodb:27017/"
+ENV MONGO_DATABASE="telegram_scanner"
+ENV MONGO_COLLECTION="groups"
 
 # Expose port (if needed for web interface)
 EXPOSE 8000

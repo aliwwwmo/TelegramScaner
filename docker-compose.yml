@@ -35,6 +35,11 @@ services:
       - MEMBER_BATCH_SIZE=${MEMBER_BATCH_SIZE:-200}
       - DELAY_BETWEEN_BATCHES=${DELAY_BETWEEN_BATCHES:-1}
       
+      # MongoDB settings
+      - MONGO_CONNECTION_STRING=mongodb://admin:password@mongodb:27017/
+      - MONGO_DATABASE=telegram_scanner
+      - MONGO_COLLECTION=groups
+      
     volumes:
       # Mount data directories for persistence
       - ./results:/app/results
@@ -50,6 +55,8 @@ services:
       - "8000:8000"  # For potential web interface
       
     restart: unless-stopped
+    depends_on:
+      - mongodb
     
     # Health check
     healthcheck:
@@ -68,7 +75,7 @@ services:
           memory: 512M
           cpus: '0.5'
 
-  # Optional: MongoDB for user tracking (if needed)
+  # MongoDB for storing group information
   mongodb:
     image: mongo:6.0
     container_name: telegram-scanner-mongo
@@ -81,8 +88,11 @@ services:
     ports:
       - "27017:27017"
     restart: unless-stopped
-    profiles:
-      - database
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
 volumes:
   mongodb_data:
