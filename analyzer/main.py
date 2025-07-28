@@ -2,6 +2,7 @@ import asyncio
 import sys
 import os
 from pathlib import Path
+from typing import List
 
 # اضافه کردن مسیر ریشه پروژه
 sys.path.append(str(Path(__file__).parent.parent))
@@ -301,6 +302,56 @@ async def analyze_single_chat(chat_link: str):
             'scan_status': scan_status
         }
 
+async def get_groups_from_database() -> List[str]:
+    """دریافت گروه‌ها از دیتابیس MongoDB"""
+    logger.info("🔍 Reading groups from MongoDB database...")
+    
+    try:
+        async with MongoServiceManager() as mongo_service:
+            # دریافت تمام گروه‌ها از دیتابیس
+            all_groups = await mongo_service.get_all_groups()
+            
+            if not all_groups:
+                logger.warning("⚠️ No groups found in MongoDB database")
+                return []
+            
+            # تبدیل گروه‌ها به لینک‌ها
+            group_links = []
+            for group in all_groups:
+                if group.link:
+                    group_links.append(group.link)
+                elif group.username:
+                    group_links.append(f"@{group.username}")
+                else:
+                    logger.warning(f"⚠️ Group {group.chat_id} has no link or username")
+            
+            logger.info(f"✅ Retrieved {len(group_links)} group links from database")
+            return group_links
+            
+    except Exception as e:
+        logger.error(f"❌ Error reading groups from database: {e}")
+        return []
+
+async def get_groups_from_file() -> List[str]:
+    """دریافت گروه‌ها از فایل links.txt"""
+    logger.info("🔍 Reading groups from links.txt file...")
+    
+    # خواندن لینک‌ها از فایل
+    links_file = Path(ANALYSIS_CONFIG.links_file)
+    if not links_file.exists():
+        logger.error(f"❌ Links file not found: {links_file}")
+        return []
+    
+    with open(links_file, 'r', encoding='utf-8') as f:
+        chat_links = [line.strip() for line in f if line.strip() and not line.startswith('#')]
+    
+    if not chat_links:
+        logger.error("❌ No chat links found in file")
+        return []
+    
+    logger.info(f"✅ Retrieved {len(chat_links)} group links from file")
+    return chat_links
+
 async def main():
     """تابع اصلی"""
     try:
@@ -310,17 +361,24 @@ async def main():
         logger.info(f"   👥 Get members: {MEMBER_SETTINGS.get_members}")
         logger.info(f"   👥 Member limit: {MEMBER_SETTINGS.member_limit}")
         
-        # خواندن لینک‌ها از فایل
-        links_file = Path(ANALYSIS_CONFIG.links_file)
-        if not links_file.exists():
-            logger.error(f"❌ Links file not found: {links_file}")
-            return
-        
-        with open(links_file, 'r', encoding='utf-8') as f:
-            chat_links = [line.strip() for line in f if line.strip() and not line.startswith('#')]
+        # خواندن گروه‌ها بر اساس تنظیمات
+        if ANALYSIS_CONFIG.use_database_for_groups:
+            logger.info("🔍 Using database as source for groups...")
+            chat_links = await get_groups_from_database()
+            
+            if not chat_links:
+                logger.warning("⚠️ No groups found in database, trying to read from file...")
+                chat_links = await get_groups_from_file()
+        else:
+            logger.info("🔍 Using file as source for groups...")
+            chat_links = await get_groups_from_file()
+            
+            if not chat_links:
+                logger.warning("⚠️ No groups found in file, trying to read from database...")
+                chat_links = await get_groups_from_database()
         
         if not chat_links:
-            logger.error("❌ No chat links found in file")
+            logger.error("❌ No chat links found in database or file")
             return
         
         logger.info(f"📋 Found {len(chat_links)} chat(s) to analyze")

@@ -257,6 +257,53 @@ class MongoService:
             logger.error(f"❌ Failed to cleanup old records: {e}")
             return 0
 
+    async def get_all_groups(self) -> List[GroupInfo]:
+        """دریافت تمام گروه‌ها از دیتابیس"""
+        try:
+            if self.collection is None:
+                logger.error("❌ MongoDB not connected")
+                return []
+            
+            cursor = self.collection.find({})
+            groups = []
+            for data in cursor:
+                try:
+                    group_info = GroupInfo.from_dict(data)
+                    groups.append(group_info)
+                except Exception as e:
+                    logger.warning(f"⚠️ Could not parse group data: {e}")
+                    continue
+            
+            logger.info(f"✅ Retrieved {len(groups)} groups from MongoDB")
+            return groups
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to get all groups: {e}")
+            return []
+    
+    async def get_groups_by_type(self, chat_type: ChatType) -> List[GroupInfo]:
+        """دریافت گروه‌ها بر اساس نوع چت"""
+        try:
+            if self.collection is None:
+                return []
+            
+            cursor = self.collection.find({"chat_type": chat_type.value})
+            groups = []
+            for data in cursor:
+                try:
+                    group_info = GroupInfo.from_dict(data)
+                    groups.append(group_info)
+                except Exception as e:
+                    logger.warning(f"⚠️ Could not parse group data: {e}")
+                    continue
+            
+            logger.info(f"✅ Retrieved {len(groups)} {chat_type.value} groups from MongoDB")
+            return groups
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to get groups by type: {e}")
+            return []
+
 class MongoServiceManager:
     """مدیر اتصال MongoDB"""
     

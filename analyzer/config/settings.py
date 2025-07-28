@@ -215,6 +215,7 @@ class AnalysisConfig:
     results_dir: str
     users_dir: str
     links_file: str
+    use_database_for_groups: bool  # تنظیم جدید
     
     @classmethod
     def from_env(cls) -> 'AnalysisConfig':
@@ -227,6 +228,9 @@ class AnalysisConfig:
         # فایل ورودی
         input_file = os.getenv('LINKS_FILE', os.getenv('INPUT_FILE', 'links.txt'))
         links_file = input_file
+        
+        # تنظیم جدید برای انتخاب منبع گروه‌ها
+        use_database_for_groups = str_to_bool(os.getenv('USE_DATABASE_FOR_GROUPS', 'true'))
         
         # ایجاد فایل نمونه اگر وجود ندارد
         if not os.path.exists(input_file):
@@ -249,7 +253,8 @@ class AnalysisConfig:
             messages_per_chat=int(os.getenv('MESSAGES_PER_CHAT', '1000')),
             results_dir=results_dir,
             users_dir=users_dir,
-            links_file=links_file
+            links_file=links_file,
+            use_database_for_groups=use_database_for_groups
         )
 
 # بارگذاری تنظیمات از environment variables

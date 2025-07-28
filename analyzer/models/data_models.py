@@ -59,21 +59,28 @@ class GroupInfo:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'GroupInfo':
         """ایجاد از دیکشنری MongoDB"""
+        # حذف فیلدهای MongoDB که در مدل ما نیستند
+        data_copy = data.copy()
+        
+        # حذف _id که MongoDB اضافه می‌کند
+        if '_id' in data_copy:
+            del data_copy['_id']
+        
         # تبدیل enum strings به enum objects
-        if 'chat_type' in data and isinstance(data['chat_type'], str):
-            data['chat_type'] = ChatType(data['chat_type'])
-        if 'last_scan_status' in data and isinstance(data['last_scan_status'], str):
-            data['last_scan_status'] = ScanStatus(data['last_scan_status'])
+        if 'chat_type' in data_copy and isinstance(data_copy['chat_type'], str):
+            data_copy['chat_type'] = ChatType(data_copy['chat_type'])
+        if 'last_scan_status' in data_copy and isinstance(data_copy['last_scan_status'], str):
+            data_copy['last_scan_status'] = ScanStatus(data_copy['last_scan_status'])
         
         # تبدیل datetime strings به datetime objects
         for field in ['last_scan_time', 'created_at', 'updated_at']:
-            if field in data and isinstance(data[field], str):
+            if field in data_copy and isinstance(data_copy[field], str):
                 try:
-                    data[field] = datetime.fromisoformat(data[field].replace('Z', '+00:00'))
+                    data_copy[field] = datetime.fromisoformat(data_copy[field].replace('Z', '+00:00'))
                 except:
-                    data[field] = None
+                    data_copy[field] = None
         
-        return cls(**data)
+        return cls(**data_copy)
     
     def update_scan_info(self, message_id: Optional[int] = None, 
                         start_message_id: Optional[int] = None,
