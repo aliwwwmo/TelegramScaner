@@ -3,6 +3,7 @@ import sys
 import os
 from pathlib import Path
 from typing import List
+from datetime import datetime, timedelta
 
 # اضافه کردن مسیر ریشه پروژه
 sys.path.append(str(Path(__file__).parent.parent))
@@ -51,14 +52,58 @@ async def analyze_single_chat(chat_link: str):
     # حل کردن و اعتبارسنجی لینک
     resolved_link = await resolve_and_validate_link(chat_link)
     
-    # ایجاد اطلاعات پایه گروه
+    # بررسی اطلاعات گروه در دیتابیس
     group_info = None
     scan_status = ScanStatus.FAILED
     last_message_id = None
     start_message_id = None
     
+    # بررسی اینکه آیا گروه در دیتابیس وجود دارد
+    async with MongoServiceManager() as mongo_service:
+        # تلاش برای یافتن گروه بر اساس لینک
+        if resolved_link.startswith('https://t.me/'):
+            username = resolved_link.split('t.me/')[1].split('/')[0]
+            group_info = await mongo_service.get_group_by_username(username)
+        
+        # اگر پیدا نشد، بر اساس لینک جستجو کن
+        if not group_info:
+            # اینجا می‌توانیم جستجوی بیشتری انجام دهیم
+            pass
+    
     async with TelegramClientManager(TELEGRAM_CONFIG) as client:
         try:
+            # بررسی زمان اسکن اگر گروه در دیتابیس وجود دارد
+            if group_info:
+                should_scan, reason, remaining_minutes = await should_scan_group(group_info)
+                
+                if not should_scan:
+                    if ANALYSIS_CONFIG.show_remaining_time:
+                        remaining_time = format_remaining_time(remaining_minutes)
+                        logger.info(f"⏰ Last scan: {group_info.last_scan_time.strftime('%Y-%m-%d %H:%M:%S')} ({remaining_minutes} minutes ago)")
+                        logger.info(f"⏭️ Skipping scan - too recent (wait {remaining_time} more)")
+                    else:
+                        logger.info(f"⏭️ Skipping scan - too recent (wait {remaining_minutes} more minutes)")
+                    
+                    return {
+                        'chat_info': {
+                            'id': group_info.chat_id,
+                            'title': 'Unknown',  # از دیتابیس نمی‌توانیم عنوان را بفهمیم
+                            'username': group_info.username,
+                            'type': 'unknown',
+                            'members_count': 0,
+                            'description': '',
+                            'link': resolved_link,
+                            'original_link': chat_link if chat_link != resolved_link else None
+                        },
+                        'analysis_results': None,
+                        'group_info': group_info,
+                        'scan_status': ScanStatus.SKIPPED,
+                        'skip_reason': 'too_recent',
+                        'remaining_minutes': remaining_minutes
+                    }
+                else:
+                    logger.info(f"✅ Group ready for scan (last scan: {group_info.last_scan_time.strftime('%Y-%m-%d %H:%M:%S') if group_info.last_scan_time else 'Never'})")
+            
             # تحلیل کامل چت
             chat, messages, members = await client.analyze_chat_complete(resolved_link)
             
@@ -191,9 +236,19 @@ async def analyze_single_chat(chat_link: str):
             if messages:
                 logger.info(f"📝 Processing {len(messages)} messages...")
                 
+                # بررسی ادامه از آخرین پیام
+                resume_message_id = 0
+                if group_info and ANALYSIS_CONFIG.resume_from_last_message:
+                    resume_message_id = await get_resume_message_id(group_info)
+                    if resume_message_id > 0:
+                        logger.info(f"🔄 Resuming scan from message ID: {resume_message_id}")
+                        # فیلتر کردن پیام‌هایی که از resume_message_id شروع می‌شوند
+                        messages = [msg for msg in messages if msg.id >= resume_message_id]
+                        logger.info(f"📝 Filtered to {len(messages)} messages from ID {resume_message_id}")
+                
                 # ذخیره اطلاعات آخرین پیام
-                last_message = messages[0]  # جدیدترین پیام
-                last_message_id = last_message.id
+                last_message = messages[0] if messages else None  # جدیدترین پیام
+                last_message_id = last_message.id if last_message else None
                 
                 # ذخیره ID پیام شروع اسکن (قدیمی‌ترین پیام در لیست)
                 if messages:
@@ -302,6 +357,50 @@ async def analyze_single_chat(chat_link: str):
             'scan_status': scan_status
         }
 
+async def should_scan_group(group_info: GroupInfo) -> tuple[bool, str, int]:
+    """
+    بررسی اینکه آیا گروه باید اسکن شود یا نه
+    
+    Returns:
+        tuple: (should_scan, reason, remaining_minutes)
+    """
+    if not group_info.last_scan_time:
+        return True, "no_previous_scan", 0
+    
+    # محاسبه زمان گذشته از آخرین اسکن
+    time_since_last_scan = datetime.utcnow() - group_info.last_scan_time
+    minutes_since_last_scan = int(time_since_last_scan.total_seconds() / 60)
+    
+    # بررسی فاصله زمانی
+    if minutes_since_last_scan < ANALYSIS_CONFIG.scan_interval_minutes:
+        remaining_minutes = ANALYSIS_CONFIG.scan_interval_minutes - minutes_since_last_scan
+        return False, "too_recent", remaining_minutes
+    
+    return True, "ready_for_scan", 0
+
+async def get_resume_message_id(group_info: GroupInfo) -> int:
+    """
+    دریافت ID پیام برای ادامه اسکن
+    """
+    if ANALYSIS_CONFIG.resume_from_last_message and group_info.last_message_id:
+        # ادامه از پیام بعدی (last_message_id + 1)
+        return group_info.last_message_id + 1
+    return 0
+
+def format_remaining_time(minutes: int) -> str:
+    """
+    فرمت کردن زمان باقی‌مانده
+    """
+    if minutes < 60:
+        return f"{minutes} دقیقه"
+    else:
+        hours = minutes // 60
+        remaining_minutes = minutes % 60
+        if remaining_minutes == 0:
+            return f"{hours} ساعت"
+        else:
+            return f"{hours} ساعت و {remaining_minutes} دقیقه"
+
 async def get_groups_from_database() -> List[str]:
     """دریافت گروه‌ها از دیتابیس MongoDB"""
     logger.info("🔍 Reading groups from MongoDB database...")
@@ -360,6 +459,9 @@ async def main():
         logger.info(f"   📝 Message limit: {MESSAGE_SETTINGS.limit}")
         logger.info(f"   👥 Get members: {MEMBER_SETTINGS.get_members}")
         logger.info(f"   👥 Member limit: {MEMBER_SETTINGS.member_limit}")
+        logger.info(f"   ⏰ Scan interval: {ANALYSIS_CONFIG.scan_interval_minutes} minutes")
+        logger.info(f"   🔄 Resume from last message: {ANALYSIS_CONFIG.resume_from_last_message}")
+        logger.info(f"   📊 Show remaining time: {ANALYSIS_CONFIG.show_remaining_time}")
         
         # خواندن گروه‌ها بر اساس تنظیمات
         if ANALYSIS_CONFIG.use_database_for_groups:
@@ -423,19 +525,23 @@ async def main():
         total_skipped = len(skipped_results)
         total_failed = len(chat_links) - total_processed - total_skipped
         
-        # شمارش کانال‌ها و سایر چت‌های ذخیره شده
+        # شمارش انواع مختلف رد شده
         saved_channels = 0
         saved_other_chats = 0
+        too_recent_scans = 0
         for result in skipped_results:
             if result.get('skip_reason') == 'channel_detected':
                 saved_channels += 1
             elif result.get('skip_reason') == 'non_group_chat':
                 saved_other_chats += 1
+            elif result.get('skip_reason') == 'too_recent':
+                too_recent_scans += 1
         
         logger.info(f"📊 Analysis Summary:")
         logger.info(f"   ✅ Successfully processed: {total_processed} groups")
         logger.info(f"   📢 Channels saved to DB: {saved_channels}")
         logger.info(f"   📝 Other chats saved to DB: {saved_other_chats}")
+        logger.info(f"   ⏰ Too recent to scan: {too_recent_scans}")
         logger.info(f"   ⏭️ Total skipped: {total_skipped}")
         logger.info(f"   ❌ Failed: {total_failed}")
         logger.info(f"   📋 Total links: {len(chat_links)}")

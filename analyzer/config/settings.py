@@ -216,6 +216,9 @@ class AnalysisConfig:
     users_dir: str
     links_file: str
     use_database_for_groups: bool  # تنظیم جدید
+    scan_interval_minutes: int  # فاصله زمانی اسکن
+    resume_from_last_message: bool  # ادامه از آخرین پیام
+    show_remaining_time: bool  # نمایش زمان باقی‌مانده
     
     @classmethod
     def from_env(cls) -> 'AnalysisConfig':
@@ -231,6 +234,11 @@ class AnalysisConfig:
         
         # تنظیم جدید برای انتخاب منبع گروه‌ها
         use_database_for_groups = str_to_bool(os.getenv('USE_DATABASE_FOR_GROUPS', 'true'))
+        
+        # تنظیمات اسکن هوشمند
+        scan_interval_minutes = int(os.getenv('SCAN_INTERVAL_MINUTES', '30'))
+        resume_from_last_message = str_to_bool(os.getenv('RESUME_FROM_LAST_MESSAGE', 'true'))
+        show_remaining_time = str_to_bool(os.getenv('SHOW_REMAINING_TIME', 'true'))
         
         # ایجاد فایل نمونه اگر وجود ندارد
         if not os.path.exists(input_file):
@@ -254,7 +262,10 @@ class AnalysisConfig:
             results_dir=results_dir,
             users_dir=users_dir,
             links_file=links_file,
-            use_database_for_groups=use_database_for_groups
+            use_database_for_groups=use_database_for_groups,
+            scan_interval_minutes=scan_interval_minutes,
+            resume_from_last_message=resume_from_last_message,
+            show_remaining_time=show_remaining_time
         )
 
 # بارگذاری تنظیمات از environment variables
