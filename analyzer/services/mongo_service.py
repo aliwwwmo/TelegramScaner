@@ -9,7 +9,7 @@ from models.data_models import GroupInfo, ChatType, ScanStatus
 from utils.logger import logger
 
 class MongoService:
-    """سرویس MongoDB برای ذخیره اطلاعات گروه‌ها"""
+    """سرویس MongoDB برای ذخیره اطلاعات گروه‌ها و کاربران"""
     
     def __init__(self, connection_string: str = None, database_name: str = None, collection_name: str = None):
         """مقداردهی اولیه سرویس MongoDB"""
@@ -19,6 +19,7 @@ class MongoService:
         self.client: Optional[MongoClient] = None
         self.db = None
         self.collection = None
+        self.users_collection = None  # کالکشن جدید برای کاربران
         
     async def connect(self) -> bool:
         """اتصال به MongoDB"""
@@ -37,11 +38,13 @@ class MongoService:
             # انتخاب دیتابیس و کالکشن
             self.db = self.client[self.database_name]
             self.collection = self.db[self.collection_name]
+            self.users_collection = self.db['users']  # کالکشن جدید برای کاربران
             
             # ایجاد ایندکس‌ها برای بهینه‌سازی
             await self._create_indexes()
             
             logger.info(f"✅ Connected to MongoDB: {self.database_name}.{self.collection_name}")
+            logger.info(f"✅ Users collection ready: {self.database_name}.users")
             return True
             
         except (ConnectionFailure, ServerSelectionTimeoutError) as e:
@@ -65,6 +68,12 @@ class MongoService:
             
             # ایندکس برای جستجو بر اساس last_scan_status
             self.collection.create_index("last_scan_status")
+            
+            # ایندکس‌های جدید برای کالکشن کاربران
+            if self.users_collection:
+                self.users_collection.create_index("user_id", unique=True)
+                self.users_collection.create_index("first_seen")
+                self.users_collection.create_index("last_seen")
             
             logger.info("✅ MongoDB indexes created successfully")
             
@@ -303,6 +312,155 @@ class MongoService:
         except Exception as e:
             logger.error(f"❌ Failed to get groups by type: {e}")
             return []
+
+    async def save_user_id(self, user_id: int) -> bool:
+        """ذخیره user_id در کالکشن users"""
+        try:
+            if self.users_collection is None:
+                logger.error("❌ MongoDB users collection not connected")
+                return False
+            
+            # بررسی اینکه آیا کاربر قبلاً وجود دارد
+            existing_user = self.users_collection.find_one({"user_id": user_id})
+            
+            if existing_user:
+                # به‌روزرسانی last_seen
+                result = self.users_collection.update_one(
+                    {"user_id": user_id},
+                    {"$set": {"last_seen": datetime.utcnow()}}
+                )
+                if result.modified_count > 0:
+                    logger.debug(f"✅ Updated user {user_id} last_seen")
+            else:
+                # درج کاربر جدید
+                user_data = {
+                    "user_id": user_id,
+                    "first_seen": datetime.utcnow(),
+                    "last_seen": datetime.utcnow()
+                }
+                result = self.users_collection.insert_one(user_data)
+                if result.inserted_id:
+                    logger.debug(f"✅ New user {user_id} saved to database")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to save user {user_id}: {e}")
+            return False
+    
+    async def save_multiple_user_ids(self, user_ids: List[int]) -> int:
+        """ذخیره چندین user_id به صورت بهینه"""
+        try:
+            if self.users_collection is None:
+                logger.error("❌ MongoDB users collection not connected")
+                return 0
+            
+            if not user_ids:
+                return 0
+            
+            current_time = datetime.utcnow()
+            saved_count = 0
+            
+            # استفاده از bulk operations برای بهینه‌سازی
+            bulk_operations = []
+            
+            for user_id in user_ids:
+                # بررسی اینکه آیا کاربر قبلاً وجود دارد
+                existing_user = self.users_collection.find_one({"user_id": user_id})
+                
+                if existing_user:
+                    # به‌روزرسانی last_seen
+                    bulk_operations.append(
+                        pymongo.UpdateOne(
+                            {"user_id": user_id},
+                            {"$set": {"last_seen": current_time}},
+                            upsert=False
+                        )
+                    )
+                else:
+                    # درج کاربر جدید
+                    user_data = {
+                        "user_id": user_id,
+                        "first_seen": current_time,
+                        "last_seen": current_time
+                    }
+                    bulk_operations.append(
+                        pymongo.InsertOne(user_data)
+                    )
+            
+            if bulk_operations:
+                result = self.users_collection.bulk_write(bulk_operations, ordered=False)
+                saved_count = result.upserted_count + result.modified_count
+                logger.info(f"✅ Saved {saved_count} users to database")
+            
+            return saved_count
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to save multiple users: {e}")
+            return 0
+    
+    async def get_user_count(self) -> int:
+        """دریافت تعداد کل کاربران"""
+        try:
+            if self.users_collection is None:
+                return 0
+            
+            return self.users_collection.count_documents({})
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to get user count: {e}")
+            return 0
+    
+    async def get_recent_users(self, hours: int = 24) -> List[int]:
+        """دریافت کاربرانی که در ساعات اخیر دیده شده‌اند"""
+        try:
+            if self.users_collection is None:
+                return []
+            
+            from datetime import timedelta
+            cutoff_time = datetime.utcnow() - timedelta(hours=hours)
+            
+            cursor = self.users_collection.find({
+                "last_seen": {"$gte": cutoff_time}
+            }).sort("last_seen", -1)
+            
+            user_ids = [doc["user_id"] for doc in cursor]
+            return user_ids
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to get recent users: {e}")
+            return []
+    
+    async def get_user_stats(self) -> Dict[str, Any]:
+        """دریافت آمار کاربران"""
+        try:
+            if self.users_collection is None:
+                return {}
+            
+            total_users = self.users_collection.count_documents({})
+            
+            # کاربران امروز
+            from datetime import timedelta
+            today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+            today_users = self.users_collection.count_documents({
+                "first_seen": {"$gte": today}
+            })
+            
+            # کاربران هفته گذشته
+            week_ago = datetime.utcnow() - timedelta(days=7)
+            week_users = self.users_collection.count_documents({
+                "first_seen": {"$gte": week_ago}
+            })
+            
+            return {
+                "total_users": total_users,
+                "today_new_users": today_users,
+                "week_new_users": week_users
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to get user stats: {e}")
+            return {}
 
 class MongoServiceManager:
     """مدیر اتصال MongoDB"""

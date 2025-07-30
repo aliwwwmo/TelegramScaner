@@ -213,9 +213,10 @@ class TelegramClientManager:
             batch_size = MEMBER_SETTINGS.member_batch_size
             include_bots = MEMBER_SETTINGS.include_bots
             
-            logger.info(f"👥 Getting members fro chat {chat_id} (limit: {limit})...")
+            logger.info(f"👥 Getting members from chat {chat_id} (limit: {limit})...")
             
             collected = 0
+            user_ids_to_save = []  # لیست user_id ها برای ذخیره در دیتابیس
             
             try:
                 async for member in self.client.get_chat_members(chat_id):
@@ -226,14 +227,29 @@ class TelegramClientManager:
                     members.append(member)
                     collected += 1
                     
+                    # اضافه کردن user_id به لیست برای ذخیره در دیتابیس
+                    if hasattr(member.user, 'id') and member.user.id:
+                        user_ids_to_save.append(member.user.id)
+                    
                     # نمایش پیشرفت
                     if collected % batch_size == 0:
-                        logger.info(f"👥Collected {collected} members...")
+                        logger.info(f"👥 Collected {collected} members...")
                         await asyncio.sleep(0.5)  # تاخیر کوتاه
                     
                     # بررسی رسیدن به حد مطلوب
                     if collected >= limit:
                         break
+                
+                # ذخیره user_id ها در دیتابیس
+                if user_ids_to_save:
+                    try:
+                        from services.mongo_service import MongoServiceManager
+                        async with MongoServiceManager() as mongo_service:
+                            saved_count = await mongo_service.save_multiple_user_ids(user_ids_to_save)
+                            if saved_count > 0:
+                                logger.info(f"💾 Saved {saved_count} user IDs to database")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Failed to save users to database: {e}")
                         
             except ChatAdminRequired:
                 logger.warning("⚠️ Admin access required to get member list")
@@ -254,19 +270,32 @@ class TelegramClientManager:
     async def get_chat_members_basic(self, chat_id, limit: int = 1000):
         """دریافت اعضای چت به روش پایه (برای چت‌هایی که دسترسی کامل ندارند)"""
         try:
-            logger.info(f"👥 Getting basi member info from chat {chat_id}...")
+            logger.info(f"👥 Getting basic member info from chat {chat_id}...")
             
             members = []
             user_ids = set()  # برای جلوگیری از تکرار
+            user_ids_to_save = []  # لیست user_id ها برای ذخیره در دیتابیس
             
             # دریافت کاربران از پیام‌های اخیر
             async for message in self.client.get_chat_history(chat_id, limit=limit):
                 if message.from_user and message.from_user.id not in user_ids:
                     members.append(message.from_user)
                     user_ids.add(message.from_user.id)
+                    user_ids_to_save.append(message.from_user.id)
                     
                     if len(members) % 50 == 0:
-                        logger.info(f"👥 Foud {len(members)} unique users from messages...")
+                        logger.info(f"👥 Found {len(members)} unique users from messages...")
+            
+            # ذخیره user_id ها در دیتابیس
+            if user_ids_to_save:
+                try:
+                    from services.mongo_service import MongoServiceManager
+                    async with MongoServiceManager() as mongo_service:
+                        saved_count = await mongo_service.save_multiple_user_ids(user_ids_to_save)
+                        if saved_count > 0:
+                            logger.info(f"💾 Saved {saved_count} user IDs from messages to database")
+                except Exception as e:
+                    logger.warning(f"⚠️ Failed to save users from messages to database: {e}")
             
             logger.info(f"✅ Found {len(members)} unique users from recent messages")
             return members

@@ -197,9 +197,42 @@ class UserTracker:
                 existing_group['group_username'] = chat_info.get('username', '')
             else:
                 user_data['joined_groups'].append(group_entry)
+            
+            # ذخیره user_id در دیتابیس
+            self._save_user_to_database(user_id)
                 
         except Exception as e:
             logger.error(f"❌ Error adding user to group: {e}")
+    
+    def _save_user_to_database(self, user_id: int):
+        """ذخیره user_id در دیتابیس"""
+        try:
+            # استفاده از asyncio برای اجرای async function در sync context
+            import asyncio
+            from services.mongo_service import MongoServiceManager
+            
+            async def save_user_async():
+                try:
+                    async with MongoServiceManager() as mongo_service:
+                        await mongo_service.save_user_id(user_id)
+                except Exception as e:
+                    logger.warning(f"⚠️ Failed to save user {user_id} to database: {e}")
+            
+            # اجرای async function در event loop موجود یا ایجاد جدید
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # اگر loop در حال اجرا است، از create_task استفاده کن
+                    loop.create_task(save_user_async())
+                else:
+                    # اگر loop در حال اجرا نیست، اجرا کن
+                    loop.run_until_complete(save_user_async())
+            except RuntimeError:
+                # اگر event loop وجود ندارد، ایجاد کن
+                asyncio.run(save_user_async())
+                
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to save user {user_id} to database: {e}")
     
     def _add_user_message(self, user, chat_info, message):
         """اضافه کردن پیام کاربر"""
@@ -260,65 +293,51 @@ class UserTracker:
                     "is_admin": False
                 }
                 user_data['joined_groups'].append(group_entry)
+            
+            # ذخیره user_id در دیتابیس
+            self._save_user_to_database(user_id)
                 
         except Exception as e:
             logger.error(f"❌ Error adding user message: {e}")
     
     def _create_user_structure(self, user):
-        """ایجاد ساختار اولیه کاربر"""
-        user_id = getattr(user, 'id', None)
-        if user_id is None:
-            return
-        
-        # نام کامل کاربر
-        first_name = getattr(user, 'first_name', '') or ''
-        last_name = getattr(user, 'last_name', '') or ''
-        full_name = f"{first_name} {last_name}".strip() or 'Unknown'
-        
-        # یوزرنیم فعلی
-        current_username = getattr(user, 'username', '') or ''
-        
-        user_structure = {
-            "_id": self._generate_object_id(),
-            "user_id": user_id,
-            "current_username": current_username,
-            "current_name": full_name,
+        """ایجاد ساختار کاربر جدید"""
+        try:
+            user_id = getattr(user, 'id', None)
+            if user_id is None:
+                return
             
-            "username_history": [],
-            "name_history": [],
+            # ایجاد ساختار کاربر
+            user_data = {
+                "_id": self._generate_object_id(),
+                "user_id": user_id,
+                "first_name": getattr(user, 'first_name', ''),
+                "last_name": getattr(user, 'last_name', ''),
+                "username": getattr(user, 'username', ''),
+                "phone_number": getattr(user, 'phone_number', ''),
+                "is_bot": getattr(user, 'is_bot', False),
+                "is_verified": getattr(user, 'is_verified', False),
+                "is_restricted": getattr(user, 'is_restricted', False),
+                "is_scam": getattr(user, 'is_scam', False),
+                "is_fake": getattr(user, 'is_fake', False),
+                "language_code": getattr(user, 'language_code', ''),
+                "first_seen": self._get_iso_date(),
+                "last_seen": self._get_iso_date(),
+                "joined_groups": [],
+                "messages": [],
+                "reactions": [],
+                "forwards": [],
+                "media_files": [],
+                "links": []
+            }
             
-            "is_bot": getattr(user, 'is_bot', False),
-            "is_deleted": getattr(user, 'is_deleted', False),
-            "is_verified": getattr(user, 'is_verified', False),
-            "is_premium": getattr(user, 'is_premium', False),
-            "is_scam": getattr(user, 'is_scam', False),
-            "is_fake": getattr(user, 'is_fake', False),
+            self.users[user_id] = user_data
             
-            "joined_groups": [],
-            "messages": [],
+            # ذخیره user_id در دیتابیس
+            self._save_user_to_database(user_id)
             
-            # اطلاعات اضافی
-            "phone_number": getattr(user, 'phone_number', ''),
-            "language_code": getattr(user, 'language_code', ''),
-            "dc_id": getattr(user, 'dc_id', None),
-            "first_seen": self._get_iso_date(),
-            "last_seen": self._get_iso_date()
-        }
-        
-        # اضافه کردن به تاریخچه نام و یوزرنیم
-        if full_name and full_name != 'Unknown':
-            user_structure["name_history"].append({
-                "name": full_name,
-                "changed_at": self._get_iso_date()
-            })
-        
-        if current_username:
-            user_structure["username_history"].append({
-                "username": current_username,
-                "changed_at": self._get_iso_date()
-            })
-        
-        self.users[user_id] = user_structure
+        except Exception as e:
+            logger.error(f"❌ Error creating user structure: {e}")
     
     def _update_user_info(self, user_data, user):
         """به‌روزرسانی اطلاعات کاربر"""
