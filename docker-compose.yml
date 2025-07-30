@@ -54,7 +54,7 @@ services:
     ports:
       - "8000:8000"  # For potential web interface
       
-    restart: unless-stopped
+  #  restart: unless-stopped
     depends_on:
       - mongodb
     

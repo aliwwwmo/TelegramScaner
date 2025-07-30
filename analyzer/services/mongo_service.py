@@ -461,6 +461,84 @@ class MongoService:
         except Exception as e:
             logger.error(f"❌ Failed to get user stats: {e}")
             return {}
+    
+    async def save_user_final_json_filename(self, user_id: int, filename: str) -> bool:
+        """ذخیره نام فایل JSON نهایی کاربر"""
+        try:
+            if self.users_collection is None:
+                logger.error("❌ MongoDB users collection not connected")
+                return False
+            
+            # به‌روزرسانی یا درج نام فایل نهایی
+            result = self.users_collection.update_one(
+                {"user_id": user_id},
+                {
+                    "$set": {
+                        "final_json_filename": filename,
+                        "final_json_updated": datetime.utcnow(),
+                        "last_seen": datetime.utcnow()
+                    }
+                },
+                upsert=True
+            )
+            
+            if result.modified_count > 0 or result.upserted_id:
+                logger.info(f"✅ Saved final JSON filename for user {user_id}: {filename}")
+                return True
+            else:
+                logger.warning(f"⚠️ No changes made for user {user_id}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ Failed to save final JSON filename for user {user_id}: {e}")
+            return False
+    
+    async def get_user_final_json_filename(self, user_id: int) -> Optional[str]:
+        """دریافت نام فایل JSON نهایی کاربر"""
+        try:
+            if self.users_collection is None:
+                return None
+            
+            user_data = self.users_collection.find_one({"user_id": user_id})
+            if user_data and "final_json_filename" in user_data:
+                return user_data["final_json_filename"]
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to get final JSON filename for user {user_id}: {e}")
+            return None
+    
+    async def update_user_final_json_info(self, user_id: int, filename: str, message_count: int = 0) -> bool:
+        """به‌روزرسانی اطلاعات فایل JSON نهایی کاربر"""
+        try:
+            if self.users_collection is None:
+                logger.error("❌ MongoDB users collection not connected")
+                return False
+            
+            update_data = {
+                "final_json_filename": filename,
+                "final_json_updated": datetime.utcnow(),
+                "final_json_message_count": message_count,
+                "last_seen": datetime.utcnow()
+            }
+            
+            result = self.users_collection.update_one(
+                {"user_id": user_id},
+                {"$set": update_data},
+                upsert=True
+            )
+            
+            if result.modified_count > 0 or result.upserted_id:
+                logger.info(f"✅ Updated final JSON info for user {user_id}: {filename} ({message_count} messages)")
+                return True
+            else:
+                logger.warning(f"⚠️ No changes made for user {user_id}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ Failed to update final JSON info for user {user_id}: {e}")
+            return False
 
 class MongoServiceManager:
     """مدیر اتصال MongoDB"""

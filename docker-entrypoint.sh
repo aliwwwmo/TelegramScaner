@@ -59,4 +59,5 @@ fi
 # Run the main application
 echo "🎯 Starting Telegram Scanner..."
 cd /app/analyzer
-python main.py 
+#python main.py 
+tail -f /dev/null
