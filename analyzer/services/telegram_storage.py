@@ -67,6 +67,13 @@ class TelegramStorage:
             try:
                 chat = await self.client.get_chat(self.target_chat_id)
                 logger.debug(f"✅ Connected to chat: {chat.title or chat.id}")
+            except FloodWait as e:
+                wait_time = e.value
+                logger.warning(f"⚠️ Flood wait in chat access: {wait_time} seconds")
+                await asyncio.sleep(wait_time)
+                # تلاش مجدد
+                chat = await self.client.get_chat(self.target_chat_id)
+                logger.debug(f"✅ Connected to chat after retry: {chat.title or chat.id}")
             except Exception as e:
                 logger.error(f"❌ Cannot access target chat {self.target_chat_id}: {e}")
                 return False
@@ -89,8 +96,11 @@ class TelegramStorage:
                 return True
                 
             except FloodWait as e:
-                logger.warning(f"⚠️ Flood wait: {e.value} seconds")
-                await asyncio.sleep(e.value)
+                wait_time = e.value
+                logger.warning(f"⚠️ Flood wait: {wait_time} seconds")
+                await asyncio.sleep(wait_time)
+                # تلاش مجدد با تاخیر بیشتر
+                await asyncio.sleep(1)
                 return await self.send_json_file(data, filename, caption)
                 
             except RPCError as e:

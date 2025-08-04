@@ -307,22 +307,37 @@ class UserTracker:
             if user_id is None:
                 return
             
+            # نام کامل اولیه
+            first_name = getattr(user, 'first_name', '') or ''
+            last_name = getattr(user, 'last_name', '') or ''
+            current_name = f"{first_name} {last_name}".strip()
+            
+            # یوزرنیم اولیه
+            current_username = getattr(user, 'username', '') or ''
+            
             # ایجاد ساختار کاربر
             user_data = {
                 "_id": self._generate_object_id(),
                 "user_id": user_id,
-                "first_name": getattr(user, 'first_name', ''),
-                "last_name": getattr(user, 'last_name', ''),
-                "username": getattr(user, 'username', ''),
+                "first_name": first_name,
+                "last_name": last_name,
+                "username": current_username,
+                "current_name": current_name,
+                "current_username": current_username,
                 "phone_number": getattr(user, 'phone_number', ''),
                 "is_bot": getattr(user, 'is_bot', False),
                 "is_verified": getattr(user, 'is_verified', False),
                 "is_restricted": getattr(user, 'is_restricted', False),
                 "is_scam": getattr(user, 'is_scam', False),
                 "is_fake": getattr(user, 'is_fake', False),
+                "is_deleted": getattr(user, 'is_deleted', False),
+                "is_premium": getattr(user, 'is_premium', False),
                 "language_code": getattr(user, 'language_code', ''),
+                "dc_id": getattr(user, 'dc_id', None),
                 "first_seen": self._get_iso_date(),
                 "last_seen": self._get_iso_date(),
+                "name_history": [{"name": current_name, "changed_at": self._get_iso_date()}] if current_name else [],
+                "username_history": [{"username": current_username, "changed_at": self._get_iso_date()}] if current_username else [],
                 "joined_groups": [],
                 "messages": [],
                 "reactions": [],

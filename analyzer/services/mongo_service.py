@@ -70,7 +70,7 @@ class MongoService:
             self.collection.create_index("last_scan_status")
             
             # ایندکس‌های جدید برای کالکشن کاربران
-            if self.users_collection:
+            if self.users_collection is not None:
                 self.users_collection.create_index("user_id", unique=True)
                 self.users_collection.create_index("first_seen")
                 self.users_collection.create_index("last_seen")
