@@ -103,6 +103,36 @@ class UserTracker:
         except Exception as e:
             logger.error(f"❌ Error storing group info: {e}")
     
+    def _extract_mentions(self, message) -> Dict[str, List[Any]]:
+        """استخراج منشن‌ها از پیام (یوزرنیم‌ها و آی‌دی‌ها در صورت وجود)."""
+        mentions_usernames: List[str] = []
+        mentions_user_ids: List[int] = []
+        try:
+            if hasattr(message, 'entities') and message.entities:
+                for entity in message.entities:
+                    entity_type = getattr(entity, 'type', None)
+                    # text mention: اشاره مستقیم به کاربر با آی‌دی
+                    if str(entity_type).lower().endswith('text_mention'):
+                        user_obj = getattr(entity, 'user', None)
+                        if user_obj and hasattr(user_obj, 'id') and user_obj.id is not None:
+                            mentions_user_ids.append(user_obj.id)
+                    # username mention: @username
+                    if str(entity_type).lower().endswith('mention'):
+                        # متن پیام را برش دهیم
+                        offset = getattr(entity, 'offset', None)
+                        length = getattr(entity, 'length', None)
+                        text = getattr(message, 'text', None) or getattr(message, 'caption', None)
+                        if text is not None and offset is not None and length is not None:
+                            handle = text[offset: offset + length]
+                            if handle.startswith('@') and len(handle) > 1:
+                                mentions_usernames.append(handle[1:])
+        except Exception as e:
+            logger.debug(f"⚠️ Error extracting mentions: {e}")
+        return {
+            'mentions_usernames': mentions_usernames,
+            'mentions_user_ids': mentions_user_ids
+        }
+
     def _detect_media_type(self, message) -> Optional[str]:
         """تشخیص نوع مدیا از شیٔ پیام Pyrogram"""
         try:
@@ -135,6 +165,75 @@ class UserTracker:
         except Exception:
             return None
 
+    def _compute_reply_info(self, message) -> Dict[str, Any]:
+        """محاسبه اطلاعات ریپلای برای یک پیام."""
+        try:
+            has_parent_obj = hasattr(message, 'reply_to_message') and getattr(message, 'reply_to_message', None) is not None
+            parent = getattr(message, 'reply_to_message', None) if has_parent_obj else None
+            # تلاش برای استخراج آیدی والد حتی در نبود آبجکت والد
+            reply_to_message_id_attr = getattr(message, 'reply_to_message_id', None)
+            reply_to_message_id = getattr(parent, 'id', None) if parent else reply_to_message_id_attr
+            reply_to_user_id = getattr(parent.from_user, 'id', None) if (parent and getattr(parent, 'from_user', None)) else None
+
+            # تخمین ریشه و عمق با دنبال‌کردن تا چند سطح محدود (اگر parent موجود باشد)
+            root_id = getattr(message, 'id', None)
+            depth = 0
+            if parent:
+                current = message
+                max_hops = 5
+                hops = 0
+                while hops < max_hops and hasattr(current, 'reply_to_message') and getattr(current, 'reply_to_message', None) is not None:
+                    depth += 1
+                    current = current.reply_to_message
+                    root_id = getattr(current, 'id', root_id)
+                    hops += 1
+            elif reply_to_message_id is not None:
+                # والد فقط با آیدی شناخته شده است
+                root_id = reply_to_message_id
+                depth = 1
+
+            # فاصله زمانی با والد
+            time_since_parent_sec = None
+            if parent and getattr(parent, 'date', None) is not None and getattr(message, 'date', None) is not None:
+                try:
+                    delta = message.date - parent.date
+                    time_since_parent_sec = int(delta.total_seconds())
+                except Exception:
+                    time_since_parent_sec = None
+
+            parent_media_type = self._detect_media_type(parent) if parent else None
+
+            mentions = self._extract_mentions(message)
+
+            return {
+                'has_parent': bool(parent) or (reply_to_message_id is not None),
+                'reply_to_message_id': reply_to_message_id,
+                'reply_to_user_id': reply_to_user_id,
+                'reply_root_id': root_id,
+                'reply_depth': depth,
+                'thread_id': root_id,
+                'position_in_thread': None,  # در مرحله دوم پر می‌شود
+                'time_since_parent_sec': time_since_parent_sec,
+                'parent_media_type': parent_media_type,
+                'mentions_user_ids': mentions['mentions_user_ids'],
+                'mentions_usernames': mentions['mentions_usernames']
+            }
+        except Exception as e:
+            logger.debug(f"⚠️ Error computing reply info: {e}")
+            return {
+                'has_parent': False,
+                'reply_to_message_id': None,
+                'reply_to_user_id': None,
+                'reply_root_id': getattr(message, 'id', None),
+                'reply_depth': 0,
+                'thread_id': getattr(message, 'id', None),
+                'position_in_thread': None,
+                'time_since_parent_sec': None,
+                'parent_media_type': None,
+                'mentions_user_ids': [],
+                'mentions_usernames': []
+            }
+
     def _compute_media_counts(self, messages: List[Dict[str, Any]]) -> Dict[str, int]:
         """محاسبه تعداد انواع مدیا در بین پیام‌ها"""
         media_type_to_count: Dict[str, int] = {}
@@ -147,6 +246,122 @@ class UserTracker:
         except Exception as e:
             logger.debug(f"⚠️ Error computing media counts: {e}")
         return media_type_to_count
+
+    def _index_group_messages(self, group_id: str) -> Dict[str, Any]:
+        """ساخت ایندکس پیام‌های یک گروه برای دسترسی سریع به پیام والد و پاسخ‌ها.
+        برمی‌گرداند: {
+            'by_id': { message_id: summary },
+            'replies_by_parent': { parent_message_id: [summary, ...] }
+        }
+        """
+        by_id: Dict[Any, Dict[str, Any]] = {}
+        replies_by_parent: Dict[Any, List[Dict[str, Any]]] = {}
+        try:
+            for other_user in self.users.values():
+                other_user_id = other_user.get('user_id')
+                other_username = other_user.get('current_username')
+                other_name = other_user.get('current_name')
+                for m in other_user.get('messages', []):
+                    if m.get('group_id') != group_id:
+                        continue
+                    mid = m.get('message_id')
+                    if mid is None:
+                        continue
+                    summary = {
+                        'message_id': mid,
+                        'user_id': other_user_id,
+                        'username': other_username,
+                        'name': other_name,
+                        'text': m.get('text', ''),
+                        'media_type': m.get('media_type'),
+                        'message_link': m.get('message_link'),
+                        'timestamp': m.get('timestamp')
+                    }
+                    by_id[mid] = summary
+                    # replies map
+                    parent_id = None
+                    reply_obj = m.get('reply') or {}
+                    parent_id = reply_obj.get('reply_to_message_id')
+                    if parent_id is None:
+                        parent_id = m.get('reply_to')
+                    if parent_id is not None:
+                        replies_by_parent.setdefault(parent_id, []).append(summary)
+        except Exception as e:
+            logger.debug(f"⚠️ Error indexing group messages: {e}")
+        return {'by_id': by_id, 'replies_by_parent': replies_by_parent}
+
+    def _compute_thread_positions_and_stats(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """محاسبه position_in_thread برای هر پیام و ساخت آمار thread ها.
+        توجه: این محاسبات بر اساس پیام‌های همین کاربر است، نه کل گروه.
+        """
+        try:
+            # گروه‌بندی پیام‌ها بر اساس thread_id
+            threads: Dict[Any, List[Dict[str, Any]]] = {}
+            for msg in messages:
+                reply = msg.get('reply') or {}
+                thread_id = reply.get('thread_id') or msg.get('message_id')
+                threads.setdefault(thread_id, []).append(msg)
+
+            # مرتب‌سازی هر thread بر اساس زمان و تعیین position
+            from datetime import datetime
+            def parse_ts(ts: Any) -> datetime:
+                if isinstance(ts, str):
+                    try:
+                        return datetime.fromisoformat(ts.replace('Z', '+00:00'))
+                    except Exception:
+                        return datetime.min
+                return datetime.min
+
+            for thread_id, msgs in threads.items():
+                msgs.sort(key=lambda m: parse_ts(m.get('timestamp')))
+                for idx, m in enumerate(msgs, start=1):
+                    if 'reply' not in m or not isinstance(m['reply'], dict):
+                        m['reply'] = {}
+                    m['reply']['position_in_thread'] = idx
+
+            # تولید آمار thread ها (در سطح پیام‌های همین کاربر)
+            thread_stats = []
+            for thread_id, msgs in threads.items():
+                if not msgs:
+                    continue
+                start_ts = parse_ts(msgs[0].get('timestamp'))
+                end_ts = parse_ts(msgs[-1].get('timestamp'))
+                # unique_users_in_thread در داده‌های کاربر-محور معمولاً 1 است
+                unique_users = { }
+                for m in msgs:
+                    # در ساختار ما اطلاعات نویسنده پیام در سطح کاربر موجود است،
+                    # لذا اینجا فقط همان کاربر خواهد بود.
+                    unique_users['this_user'] = True
+
+                # محاسبه میانگین فاصله زمانی بین پیام‌های متوالی در این thread
+                gaps = []
+                for i in range(1, len(msgs)):
+                    t_cur = parse_ts(msgs[i].get('timestamp'))
+                    t_prev = parse_ts(msgs[i-1].get('timestamp'))
+                    gaps.append(int((t_cur - t_prev).total_seconds()))
+                avg_gap = int(sum(gaps) / len(gaps)) if gaps else 0
+
+                # آمار مدیا در thread
+                media_counts = self._compute_media_counts(msgs)
+
+                thread_stats.append({
+                    'thread_id': thread_id,
+                    'thread_length': len(msgs),
+                    'unique_users_in_thread': len(unique_users),
+                    'avg_time_between_replies_sec': avg_gap,
+                    'media_in_thread': media_counts,
+                    'start_timestamp': msgs[0].get('timestamp'),
+                    'end_timestamp': msgs[-1].get('timestamp')
+                })
+
+            return {
+                'thread_stats': thread_stats
+            }
+        except Exception as e:
+            logger.debug(f"⚠️ Error computing thread positions/stats: {e}")
+            return {
+                'thread_stats': []
+            }
 
     def process_message(self, message, chat_info):
         """پردازش یک پیام و استخراج اطلاعات کاربر"""
@@ -311,6 +526,19 @@ class UserTracker:
             media_type = self._detect_media_type(message)
             has_media = media_type is not None
 
+            # اطلاعات ریپلای
+            reply_to_message_id_safe = None
+            try:
+                # تلاش برای استخراج ID صحیح والد
+                if hasattr(message, 'reply_to_message') and message.reply_to_message is not None:
+                    reply_to_message_id_safe = getattr(message.reply_to_message, 'id', None)
+                if not reply_to_message_id_safe:
+                    reply_to_message_id_safe = getattr(message, 'reply_to_message_id', None)
+            except Exception:
+                reply_to_message_id_safe = getattr(message, 'reply_to_message_id', None)
+
+            reply_info = self._compute_reply_info(message)
+
             # اطلاعات پیام
             message_entry = {
                 "group_id": chat_id,
@@ -319,13 +547,29 @@ class UserTracker:
                 "text": getattr(message, 'text', '') or getattr(message, 'caption', '') or '',
                 "timestamp": self._get_iso_date(getattr(message, 'date', None)),
                 "reactions": self._extract_reactions(message),
-                "reply_to": getattr(message, 'reply_to_message_id', None),
+                # مقدار قبلی برای حفظ سازگاری
+                "reply_to": reply_to_message_id_safe,
                 "edited": getattr(message, 'edit_date', None) is not None,
                 "is_forwarded": getattr(message, 'forward_date', None) is not None,
                 "message_link": message_link,  # اضافه کردن لینک پیام
                 "has_media": has_media,
-                "media_type": media_type
+                "media_type": media_type,
+                "reply": reply_info
             }
+
+            # غنی‌سازی پیام با والد و پاسخ‌ها (در صورت امکان) با استفاده از ایندکس گروه
+            try:
+                index_map = self._index_group_messages(chat_id)
+                by_id = index_map.get('by_id', {})
+                replies_by_parent = index_map.get('replies_by_parent', {})
+
+                parent_id = reply_info.get('reply_to_message_id') or reply_to_message_id_safe
+                if parent_id in by_id:
+                    message_entry['parent_message'] = by_id[parent_id]
+                if message_id in replies_by_parent:
+                    message_entry['replies'] = replies_by_parent.get(message_id, [])
+            except Exception as e:
+                logger.debug(f"⚠️ Error enriching message with parent/replies: {e}")
             
             # حذف مقادیر None
             message_entry = {k: v for k, v in message_entry.items() if v is not None}
@@ -551,6 +795,23 @@ class UserTracker:
                             msg for msg in user_data.get('messages', [])
                             if msg.get('group_id') == group_id
                         ]
+
+                        # ساخت ایندکس پیام‌های گروه برای افزودن parent/replies
+                        index_map = self._index_group_messages(group_id)
+                        by_id = index_map.get('by_id', {})
+                        replies_by_parent = index_map.get('replies_by_parent', {})
+                        for m in group_messages:
+                            try:
+                                pid = (m.get('reply') or {}).get('reply_to_message_id') or m.get('reply_to')
+                                if pid in by_id:
+                                    m['parent_message'] = by_id[pid]
+                                if m.get('message_id') in replies_by_parent:
+                                    m['replies'] = replies_by_parent.get(m.get('message_id'), [])
+                            except Exception as e:
+                                logger.debug(f"⚠️ Error enriching grouped message: {e}")
+
+                        # حذف خروجی آمار thread ها بر اساس درخواست
+                        thread_stats_in_group = []
                         
                         # فیلتر کردن اطلاعات گروه برای این گروه خاص
                         current_group_info = [g for g in user_data.get('joined_groups', []) if g.get('group_id') == group_id]
@@ -559,7 +820,7 @@ class UserTracker:
                         media_counts = self._compute_media_counts(group_messages)
                         total_media = sum(media_counts.values())
 
-                        # ساختار داده برای این کاربر در این گروه خاص
+                        # ساختار داده برای این کاربر در این گروه خاص (به‌همراه پیام‌های والد/پاسخ‌ها)
                         user_in_group = {
                             "_id": user_data["_id"],
                             "user_id": user_data["user_id"],
@@ -583,6 +844,7 @@ class UserTracker:
                             # آمار مدیا در این گروه
                             "media_counts_in_group": media_counts,
                             "total_media_in_group": total_media,
+                            # (حذف thread_stats_in_group بر اساس درخواست)
                             
                             # اطلاعات اضافی
                             "phone_number": user_data.get("phone_number", ""),
@@ -728,6 +990,9 @@ class UserTracker:
                                 msg for msg in user_data.get('messages', [])
                                 if msg.get('group_id') == group_id
                             ]
+
+                            # حذف خروجی آمار thread ها بر اساس درخواست
+                            thread_stats_in_group = []
                             
                             # فیلتر کردن اطلاعات گروه برای این گروه خاص
                             current_group_info = [g for g in user_data.get('joined_groups', []) if g.get('group_id') == group_id]
@@ -758,6 +1023,7 @@ class UserTracker:
                                 # آمار مدیا در این گروه
                                 "media_counts_in_group": media_counts,
                                 "total_media_in_group": total_media,
+                                # (حذف thread_stats_in_group بر اساس درخواست)
                                 
                                 # اطلاعات اضافی
                                 "phone_number": user_data.get("phone_number", ""),
