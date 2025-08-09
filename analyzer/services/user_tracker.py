@@ -292,7 +292,7 @@ class UserTracker:
 
     def _compute_thread_positions_and_stats(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
         """محاسبه position_in_thread برای هر پیام و ساخت آمار thread ها.
-        توجه: این محاسبات بر اساس پیام‌های همین کاربر است، نه کل گروه.
+        توجه: این محسابات بر اساس پیام‌های همین کاربر است، نه کل گروه.
         """
         try:
             # گروه‌بندی پیام‌ها بر اساس thread_id
@@ -329,7 +329,7 @@ class UserTracker:
                 # unique_users_in_thread در داده‌های کاربر-محور معمولاً 1 است
                 unique_users = { }
                 for m in msgs:
-                    # در ساختار ما اطلاعات نویسنده پیام در سطح کاربر موجود است،
+                    # در ساختار ما اطلاعات نویسنده پیام در سطح کاربر موجود است، 
                     # لذا اینجا فقط همان کاربر خواهد بود.
                     unique_users['this_user'] = True
 
@@ -362,6 +362,106 @@ class UserTracker:
             return {
                 'thread_stats': []
             }
+
+    # ------------------- توابع جدید برای خروجی و ساخت درختِ thread -------------------
+    def _prune_message_output(self, msg: Dict[str, Any]):
+        """فیلدهای ناخواسته را از پیام حذف می‌کند (در محل خروجی)."""
+        try:
+            # حذف فیلدهای سطح بالا
+            for k in ['reply_to', 'reply_to_user_id', 'reply_root_id']:
+                if k in msg:
+                    msg.pop(k, None)
+
+            # حذف فیلدهای داخل reply اگر مقدارشون None یا خالی است یا نامطلوب
+            reply = msg.get('reply')
+            if isinstance(reply, dict):
+                # لیستی از کلیدهای ناخواسته
+                bad = [
+                    'position_in_thread', 'time_since_parent_sec', 'parent_media_type',
+                    'mentions_user_ids', 'mentions_usernames'
+                ]
+                for k in bad:
+                    if k in reply:
+                        # اگر مقدار None یا [] یا '' هست => حذف
+                        val = reply.get(k)
+                        if val is None or (isinstance(val, (list, dict)) and len(val) == 0):
+                            reply.pop(k, None)
+
+                # اگر reply خالی شد، آن را حذف کن
+                if not reply:
+                    msg.pop('reply', None)
+                else:
+                    msg['reply'] = reply
+
+            # همچنین حذف فیلدهای None از خود پیام
+            keys_to_remove = [k for k, v in msg.items() if v is None]
+            for k in keys_to_remove:
+                msg.pop(k, None)
+        except Exception as e:
+            logger.debug(f"⚠️ Error pruning message output: {e}")
+
+    def _build_thread_tree(self, root_id: int, by_id: Dict[int, Dict[str, Any]],
+                           replies_by_parent: Dict[int, List[Dict[str, Any]]]) -> Dict[str, Any]:
+        """ساخت درخت برای یک ریشه (بازگشتی)."""
+        node = by_id.get(root_id, {'message_id': root_id, 'text': ''})
+        # کپی کردن فیلدهای مهم (اجتناب از اضافه‌بار)
+        node_repr = {
+            'message_id': node.get('message_id'),
+            'username': node.get('username'),
+            'user_id': node.get('user_id'),
+            'text': node.get('text'),
+            'timestamp': node.get('timestamp'),
+            'message_link': node.get('message_link')
+        }
+        children = []
+        for child in replies_by_parent.get(root_id, []):
+            cid = child.get('message_id')
+            if cid is None:
+                continue
+            children.append(self._build_thread_tree(cid, by_id, replies_by_parent))
+        if children:
+            node_repr['children'] = children
+        return node_repr
+
+    def _collect_threads_for_group(self, by_id: Dict[int, Dict[str, Any]],
+                                   replies_by_parent: Dict[int, List[Dict[str, Any]]],
+                                   user_id: int) -> List[Dict[str, Any]]:
+        """ایجاد لیست درخت‌های thread که شامل پیام‌های کاربر user_id هستند."""
+        try:
+            # جمع‌آوری ids که به عنوان child ظاهر می‌شوند
+            child_ids = set()
+            for lst in replies_by_parent.values():
+                for item in lst:
+                    if isinstance(item, dict) and item.get('message_id') is not None:
+                        child_ids.add(item['message_id'])
+
+            all_ids = set(by_id.keys())
+            root_candidates = [rid for rid in all_ids if rid not in child_ids]
+
+            threads = []
+            # اگر هیچ ریشه‌ای پیدا نشد، ممکن است حلقه‌ای باشد؛ fallback: همه idها را ریشه فرض کن
+            if not root_candidates:
+                root_candidates = list(all_ids)
+
+            def thread_contains_user(node: Dict[str, Any], uid: int) -> bool:
+                if node.get('user_id') == uid:
+                    return True
+                for c in node.get('children', []):
+                    if thread_contains_user(c, uid):
+                        return True
+                return False
+
+            for rid in root_candidates:
+                tree = self._build_thread_tree(rid, by_id, replies_by_parent)
+                if thread_contains_user(tree, user_id):
+                    threads.append(tree)
+
+            return threads
+        except Exception as e:
+            logger.debug(f"⚠️ Error collecting threads: {e}")
+            return []
+
+    # -------------------------------------------------------------------------
 
     def process_message(self, message, chat_info):
         """پردازش یک پیام و استخراج اطلاعات کاربر"""
@@ -806,35 +906,24 @@ class UserTracker:
                             if msg.get('group_id') == group_id
                         ]
 
-                        # ساخت ایندکس پیام‌های گروه برای افزودن parent/replies
+                        # ساخت ایندکس پیام‌های گروه برای افزودن parent/replies و ساخت threads
                         index_map = self._index_group_messages(group_id)
                         by_id = index_map.get('by_id', {})
                         replies_by_parent = index_map.get('replies_by_parent', {})
+
+                        # پاک‌سازی فیلدهای ناخواسته از پیام‌های همین کاربر
                         for m in group_messages:
                             try:
-                                pid = (m.get('reply') or {}).get('reply_to_message_id') or m.get('reply_to')
-                                if pid in by_id:
-                                    p = by_id[pid]
-                                    m['parent_message'] = {
-                                        'message_id': p.get('message_id'),
-                                        'username': p.get('username'),
-                                        'text': p.get('text', '')
-                                    }
-                                if m.get('message_id') in replies_by_parent:
-                                    reps = replies_by_parent.get(m.get('message_id'), [])
-                                    m['replies'] = [
-                                        {
-                                            'message_id': r.get('message_id'),
-                                            'username': r.get('username'),
-                                            'text': r.get('text', '')
-                                        } for r in reps
-                                    ]
-                            except Exception as e:
-                                logger.debug(f"⚠️ Error enriching grouped message: {e}")
+                                self._prune_message_output(m)
+                            except Exception:
+                                pass
+
+                        # ساخت درخت‌های thread که کاربر در آنها حضور دارد
+                        threads_for_user = self._collect_threads_for_group(by_id, replies_by_parent, user_data['user_id'])
 
                         # حذف خروجی آمار thread ها بر اساس درخواست
                         thread_stats_in_group = []
-                        
+
                         # فیلتر کردن اطلاعات گروه برای این گروه خاص
                         current_group_info = [g for g in user_data.get('joined_groups', []) if g.get('group_id') == group_id]
                         
@@ -866,6 +955,8 @@ class UserTracker:
                             # آمار مدیا در این گروه
                             "media_counts_in_group": media_counts,
                             "total_media_in_group": total_media,
+                            # اضافه کردن view درختی threadها
+                            "threads": threads_for_user,
                             # (حذف thread_stats_in_group بر اساس درخواست)
                             
                             # اطلاعات اضافی
@@ -1013,6 +1104,20 @@ class UserTracker:
                                 if msg.get('group_id') == group_id
                             ]
 
+                            # ساخت ایندکس پیام‌های گروه برای افزودن parent/replies و threads
+                            index_map = self._index_group_messages(group_id)
+                            by_id = index_map.get('by_id', {})
+                            replies_by_parent = index_map.get('replies_by_parent', {})
+
+                            # پاک‌سازی فیلدهای ناخواسته از پیام‌های همین کاربر
+                            for m in group_messages:
+                                try:
+                                    self._prune_message_output(m)
+                                except Exception:
+                                    pass
+
+                            threads_for_user = self._collect_threads_for_group(by_id, replies_by_parent, user_data['user_id'])
+
                             # حذف خروجی آمار thread ها بر اساس درخواست
                             thread_stats_in_group = []
                             
@@ -1045,6 +1150,8 @@ class UserTracker:
                                 # آمار مدیا در این گروه
                                 "media_counts_in_group": media_counts,
                                 "total_media_in_group": total_media,
+                                # اضافه کردن view درختی threadها
+                                "threads": threads_for_user,
                                 # (حذف thread_stats_in_group بر اساس درخواست)
                                 
                                 # اطلاعات اضافی
