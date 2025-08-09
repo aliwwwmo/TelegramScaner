@@ -523,8 +523,7 @@ class UserTracker:
             message_link = self._generate_message_link(chat_username, message_id)
             
             # تشخیص نوع مدیا
-            media_type = self._detect_media_type(message)
-            has_media = media_type is not None
+            media_type = self._detect_media_type(message) or ""
 
             # اطلاعات ریپلای
             reply_to_message_id_safe = None
@@ -552,7 +551,6 @@ class UserTracker:
                 "edited": getattr(message, 'edit_date', None) is not None,
                 "is_forwarded": getattr(message, 'forward_date', None) is not None,
                 "message_link": message_link,  # اضافه کردن لینک پیام
-                "has_media": has_media,
                 "media_type": media_type,
                 "reply": reply_info
             }
@@ -565,9 +563,21 @@ class UserTracker:
 
                 parent_id = reply_info.get('reply_to_message_id') or reply_to_message_id_safe
                 if parent_id in by_id:
-                    message_entry['parent_message'] = by_id[parent_id]
+                    p = by_id[parent_id]
+                    message_entry['parent_message'] = {
+                        'message_id': p.get('message_id'),
+                        'username': p.get('username'),
+                        'text': p.get('text', '')
+                    }
                 if message_id in replies_by_parent:
-                    message_entry['replies'] = replies_by_parent.get(message_id, [])
+                    reps = replies_by_parent.get(message_id, [])
+                    message_entry['replies'] = [
+                        {
+                            'message_id': r.get('message_id'),
+                            'username': r.get('username'),
+                            'text': r.get('text', '')
+                        } for r in reps
+                    ]
             except Exception as e:
                 logger.debug(f"⚠️ Error enriching message with parent/replies: {e}")
             
@@ -804,9 +814,21 @@ class UserTracker:
                             try:
                                 pid = (m.get('reply') or {}).get('reply_to_message_id') or m.get('reply_to')
                                 if pid in by_id:
-                                    m['parent_message'] = by_id[pid]
+                                    p = by_id[pid]
+                                    m['parent_message'] = {
+                                        'message_id': p.get('message_id'),
+                                        'username': p.get('username'),
+                                        'text': p.get('text', '')
+                                    }
                                 if m.get('message_id') in replies_by_parent:
-                                    m['replies'] = replies_by_parent.get(m.get('message_id'), [])
+                                    reps = replies_by_parent.get(m.get('message_id'), [])
+                                    m['replies'] = [
+                                        {
+                                            'message_id': r.get('message_id'),
+                                            'username': r.get('username'),
+                                            'text': r.get('text', '')
+                                        } for r in reps
+                                    ]
                             except Exception as e:
                                 logger.debug(f"⚠️ Error enriching grouped message: {e}")
 
