@@ -124,11 +124,6 @@ python WebScraping/main.py
 4. **Push** to branch (`git push origin feature/amazing-feature`)
 5. Open a **Pull Request**
 
-## 📄 **License**
-
-This project is licensed under the **MIT** License. See the [LICENSE](LICENSE) file for details.
-
-## 🙏 **Acknowledgments**
 
 - **Telegram API** for providing powerful API
 - **MongoDB** for excellent database
@@ -137,9 +132,6 @@ This project is licensed under the **MIT** License. See the [LICENSE](LICENSE) f
 
 ---
 
-**Developer:** AI Assistant  
-**Last Updated:** 2025-01-27  
-**Version:** 2.0  
 
 ⭐ If this project was helpful, please give it a star!
 
