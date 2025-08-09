@@ -103,6 +103,51 @@ class UserTracker:
         except Exception as e:
             logger.error(f"❌ Error storing group info: {e}")
     
+    def _detect_media_type(self, message) -> Optional[str]:
+        """تشخیص نوع مدیا از شیٔ پیام Pyrogram"""
+        try:
+            # ترتیب بررسی مطابق با متداول‌ترین‌ها
+            if hasattr(message, 'photo') and getattr(message, 'photo', None) is not None:
+                return 'photo'
+            if hasattr(message, 'video') and getattr(message, 'video', None) is not None:
+                return 'video'
+            if hasattr(message, 'voice') and getattr(message, 'voice', None) is not None:
+                return 'voice'
+            if hasattr(message, 'audio') and getattr(message, 'audio', None) is not None:
+                return 'audio'
+            if hasattr(message, 'document') and getattr(message, 'document', None) is not None:
+                return 'document'
+            if hasattr(message, 'sticker') and getattr(message, 'sticker', None) is not None:
+                return 'sticker'
+            if hasattr(message, 'animation') and getattr(message, 'animation', None) is not None:
+                return 'animation'
+            if hasattr(message, 'video_note') and getattr(message, 'video_note', None) is not None:
+                return 'video_note'
+            if hasattr(message, 'contact') and getattr(message, 'contact', None) is not None:
+                return 'contact'
+            if hasattr(message, 'location') and getattr(message, 'location', None) is not None:
+                return 'location'
+            if hasattr(message, 'venue') and getattr(message, 'venue', None) is not None:
+                return 'venue'
+            if hasattr(message, 'poll') and getattr(message, 'poll', None) is not None:
+                return 'poll'
+            return None
+        except Exception:
+            return None
+
+    def _compute_media_counts(self, messages: List[Dict[str, Any]]) -> Dict[str, int]:
+        """محاسبه تعداد انواع مدیا در بین پیام‌ها"""
+        media_type_to_count: Dict[str, int] = {}
+        try:
+            for message in messages:
+                media_type = message.get('media_type')
+                if not media_type:
+                    continue
+                media_type_to_count[media_type] = media_type_to_count.get(media_type, 0) + 1
+        except Exception as e:
+            logger.debug(f"⚠️ Error computing media counts: {e}")
+        return media_type_to_count
+
     def process_message(self, message, chat_info):
         """پردازش یک پیام و استخراج اطلاعات کاربر"""
         try:
@@ -262,6 +307,10 @@ class UserTracker:
             message_id = getattr(message, 'id', 0)
             message_link = self._generate_message_link(chat_username, message_id)
             
+            # تشخیص نوع مدیا
+            media_type = self._detect_media_type(message)
+            has_media = media_type is not None
+
             # اطلاعات پیام
             message_entry = {
                 "group_id": chat_id,
@@ -273,7 +322,9 @@ class UserTracker:
                 "reply_to": getattr(message, 'reply_to_message_id', None),
                 "edited": getattr(message, 'edit_date', None) is not None,
                 "is_forwarded": getattr(message, 'forward_date', None) is not None,
-                "message_link": message_link  # اضافه کردن لینک پیام
+                "message_link": message_link,  # اضافه کردن لینک پیام
+                "has_media": has_media,
+                "media_type": media_type
             }
             
             # حذف مقادیر None
@@ -504,6 +555,10 @@ class UserTracker:
                         # فیلتر کردن اطلاعات گروه برای این گروه خاص
                         current_group_info = [g for g in user_data.get('joined_groups', []) if g.get('group_id') == group_id]
                         
+                        # آمار مدیا برای پیام‌های این گروه
+                        media_counts = self._compute_media_counts(group_messages)
+                        total_media = sum(media_counts.values())
+
                         # ساختار داده برای این کاربر در این گروه خاص
                         user_in_group = {
                             "_id": user_data["_id"],
@@ -525,6 +580,9 @@ class UserTracker:
                             "group_info": current_group_info[0] if current_group_info else {},
                             "messages_in_this_group": group_messages,
                             "total_messages_in_group": len(group_messages),
+                            # آمار مدیا در این گروه
+                            "media_counts_in_group": media_counts,
+                            "total_media_in_group": total_media,
                             
                             # اطلاعات اضافی
                             "phone_number": user_data.get("phone_number", ""),
@@ -579,6 +637,9 @@ class UserTracker:
                                     "timestamp": {"$date": msg["timestamp"]}
                                 } for msg in group_messages
                             ],
+                            # اضافه کردن آمار مدیا در BSON خلاصه
+                            "media_counts_in_group": media_counts,
+                            "total_media_in_group": total_media,
                             "first_seen": {"$date": user_data["first_seen"]},
                             "last_seen": {"$date": user_data["last_seen"]},
                             "export_info": {
@@ -672,6 +733,8 @@ class UserTracker:
                             current_group_info = [g for g in user_data.get('joined_groups', []) if g.get('group_id') == group_id]
                             
                             # ساختار داده برای این کاربر در این گروه خاص
+                            media_counts = self._compute_media_counts(group_messages)
+                            total_media = sum(media_counts.values())
                             user_in_group = {
                                 "_id": user_data["_id"],
                                 "user_id": user_data["user_id"],
@@ -692,6 +755,9 @@ class UserTracker:
                                 "group_info": current_group_info[0] if current_group_info else {},
                                 "messages_in_this_group": group_messages,
                                 "total_messages_in_group": len(group_messages),
+                                # آمار مدیا در این گروه
+                                "media_counts_in_group": media_counts,
+                                "total_media_in_group": total_media,
                                 
                                 # اطلاعات اضافی
                                 "phone_number": user_data.get("phone_number", ""),
