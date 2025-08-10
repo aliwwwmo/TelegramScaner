@@ -205,34 +205,65 @@ class UserTracker:
 
             mentions = self._extract_mentions(message)
 
-            return {
+            # خلاصه‌ای از پیام والد برای قرار دادن داخل reply
+            parent_message_summary = None
+            if parent:
+                try:
+                    parent_author = getattr(parent, 'from_user', None)
+                    parent_username = getattr(parent_author, 'username', None) if parent_author else None
+                    parent_user_id = getattr(parent_author, 'id', None) if parent_author else None
+                    parent_text = getattr(parent, 'text', None) or getattr(parent, 'caption', None)
+                    parent_id = getattr(parent, 'id', None)
+
+                    # تلاش برای ساخت لینک پیام والد
+                    chat_obj = getattr(parent, 'chat', None) or getattr(message, 'chat', None)
+                    chat_username = getattr(chat_obj, 'username', None) if chat_obj else None
+                    parent_link = self._generate_message_link(chat_username, parent_id) if chat_username and parent_id else ""
+
+                    parent_message_summary = {
+                        'message_id': parent_id,
+                        'author_id': parent_user_id,
+                        'author_username': parent_username,
+                        'text': parent_text,
+                        'media_type': parent_media_type,
+                        'message_link': parent_link
+                    }
+                except Exception:
+                    parent_message_summary = None
+
+            result = {
                 'has_parent': bool(parent) or (reply_to_message_id is not None),
                 'reply_to_message_id': reply_to_message_id,
-             #   'reply_to_user_id': reply_to_user_id,
-              #  'reply_root_id': root_id,
+            #   'reply_to_user_id': reply_to_user_id,
+            #  'reply_root_id': root_id,
                 'reply_depth': depth,
                 'thread_id': root_id,
-               # 'position_in_thread': None,  # در مرحله دوم پر می‌شود
+            # 'position_in_thread': None,  # در مرحله دوم پر می‌شود
                 #'time_since_parent_sec': time_since_parent_sec,
                # 'parent_media_type': parent_media_type,
                 #'mentions_user_ids': mentions['mentions_user_ids'],
                 #'mentions_usernames': mentions['mentions_usernames']
             }
+
+            if parent_message_summary is not None:
+                result['parent_message'] = parent_message_summary
+
+            return result
         except Exception as e:
             logger.debug(f"⚠️ Error computing reply info: {e}")
             return {
                 'has_parent': False,
                 'reply_to_message_id': None,
-           #     'reply_to_user_id': None,
-            #    'reply_root_id': getattr(message, 'id', None),
-                'reply_depth': 0,
-                'thread_id': getattr(message, 'id', None),
-            #    'position_in_thread': None,
-            #    'time_since_parent_sec': None,
-                'parent_media_type': None,
-             #   'mentions_user_ids': [],
-             #   'mentions_usernames': []
-            }
+            #     'reply_to_user_id': None,
+             #    'reply_root_id': getattr(message, 'id', None),
+                 'reply_depth': 0,
+                 'thread_id': getattr(message, 'id', None),
+             #    'position_in_thread': None,
+             #    'time_since_parent_sec': None,
+                 'parent_media_type': None,
+              #   'mentions_user_ids': [],
+              #   'mentions_usernames': []
+             }
 
     def _compute_media_counts(self, messages: List[Dict[str, Any]]) -> Dict[str, int]:
         """محاسبه تعداد انواع مدیا در بین پیام‌ها"""
@@ -538,6 +569,30 @@ class UserTracker:
 
             reply_info = self._compute_reply_info(message)
 
+            # اگر والد در مرحله قبل یافت نشد، حداقل اطلاعات شناسه و لینک را در reply.parent_message قرار بده
+            try:
+                if isinstance(reply_info, dict) and 'parent_message' not in reply_info and reply_to_message_id_safe:
+                    minimal_parent_link = self._generate_message_link(chat_username, reply_to_message_id_safe)
+                    reply_info['parent_message'] = {
+                        'message_id': reply_to_message_id_safe,
+                        'message_link': minimal_parent_link
+                    }
+            except Exception:
+                pass
+
+            # افزودن خلاصهٔ خود پیام داخل reply
+            try:
+                message_text_value = getattr(message, 'text', '') or getattr(message, 'caption', '') or ''
+                if isinstance(reply_info, dict):
+                    reply_info['this_message'] = {
+                        'message_id': message_id,
+                        'text': message_text_value,
+                        'media_type': media_type,
+                        'message_link': message_link
+                    }
+            except Exception:
+                pass
+
             # اطلاعات پیام
             message_entry = {
                 "group_id": chat_id,
@@ -568,6 +623,24 @@ class UserTracker:
                         'message_id': p.get('message_id'),
                         'username': p.get('username'),
                         'text': p.get('text', '')
+                    }
+                    # اطمینان از قرار گرفتن پیام والد داخل reply نیز
+                    if 'reply' not in message_entry or not isinstance(message_entry['reply'], dict):
+                        message_entry['reply'] = {}
+                    message_entry['reply']['parent_message'] = {
+                        'message_id': p.get('message_id'),
+                        'username': p.get('username'),
+                        'text': p.get('text', ''),
+                        'media_type': p.get('media_type'),
+                        'message_link': p.get('message_link')
+                    }
+                elif parent_id:
+                    # درج حداقلی اگر در ایندکس پیدا نشد
+                    if 'reply' not in message_entry or not isinstance(message_entry['reply'], dict):
+                        message_entry['reply'] = {}
+                    message_entry['reply']['parent_message'] = {
+                        'message_id': parent_id,
+                        'message_link': self._generate_message_link(chat_username, parent_id)
                     }
                 if message_id in replies_by_parent:
                     reps = replies_by_parent.get(message_id, [])
@@ -820,6 +893,24 @@ class UserTracker:
                                         'username': p.get('username'),
                                         'text': p.get('text', '')
                                     }
+                                    # درج والد در reply نیز برای سازگاری با خروجی موردنظر
+                                    if 'reply' not in m or not isinstance(m['reply'], dict):
+                                        m['reply'] = {}
+                                    m['reply']['parent_message'] = {
+                                        'message_id': p.get('message_id'),
+                                        'username': p.get('username'),
+                                        'text': p.get('text', ''),
+                                        'media_type': p.get('media_type'),
+                                        'message_link': p.get('message_link')
+                                    }
+                                elif pid:
+                                    # درج حداقلی اگر در ایندکس پیدا نشد
+                                    if 'reply' not in m or not isinstance(m['reply'], dict):
+                                        m['reply'] = {}
+                                    m['reply']['parent_message'] = {
+                                        'message_id': pid,
+                                        'message_link': self._generate_message_link(group_username, pid)
+                                    }
                                 if m.get('message_id') in replies_by_parent:
                                     reps = replies_by_parent.get(m.get('message_id'), [])
                                     m['replies'] = [
@@ -1013,6 +1104,50 @@ class UserTracker:
                                 if msg.get('group_id') == group_id
                             ]
 
+                            # ساخت ایندکس پیام‌های گروه و غنی‌سازی مانند ذخیره فایل محلی
+                            try:
+                                index_map = self._index_group_messages(group_id)
+                                by_id = index_map.get('by_id', {})
+                                replies_by_parent = index_map.get('replies_by_parent', {})
+                                for m in group_messages:
+                                    pid = (m.get('reply') or {}).get('reply_to_message_id') or m.get('reply_to')
+                                    if pid in by_id:
+                                        p = by_id[pid]
+                                        m['parent_message'] = {
+                                            'message_id': p.get('message_id'),
+                                            'username': p.get('username'),
+                                            'text': p.get('text', '')
+                                        }
+                                        # درج والد در reply نیز
+                                        if 'reply' not in m or not isinstance(m['reply'], dict):
+                                            m['reply'] = {}
+                                        m['reply']['parent_message'] = {
+                                            'message_id': p.get('message_id'),
+                                            'username': p.get('username'),
+                                            'text': p.get('text', ''),
+                                            'media_type': p.get('media_type'),
+                                            'message_link': p.get('message_link')
+                                        }
+                                    elif pid:
+                                        # درج حداقلی اگر در ایندکس پیدا نشد
+                                        if 'reply' not in m or not isinstance(m['reply'], dict):
+                                            m['reply'] = {}
+                                        m['reply']['parent_message'] = {
+                                            'message_id': pid,
+                                            'message_link': self._generate_message_link(group_username, pid)
+                                        }
+                                    if m.get('message_id') in replies_by_parent:
+                                        reps = replies_by_parent.get(m.get('message_id'), [])
+                                        m['replies'] = [
+                                            {
+                                                'message_id': r.get('message_id'),
+                                                'username': r.get('username'),
+                                                'text': r.get('text', '')
+                                            } for r in reps
+                                        ]
+                            except Exception as e:
+                                logger.debug(f"⚠️ Error enriching cloud-export messages: {e}")
+ 
                             # حذف خروجی آمار thread ها بر اساس درخواست
                             thread_stats_in_group = []
                             
