@@ -619,12 +619,7 @@ class UserTracker:
                 parent_id = reply_info.get('reply_to_message_id') or reply_to_message_id_safe
                 if parent_id in by_id:
                     p = by_id[parent_id]
-                    message_entry['parent_message'] = {
-                        'message_id': p.get('message_id'),
-                        'username': p.get('username'),
-                        'text': p.get('text', '')
-                    }
-                    # اطمینان از قرار گرفتن پیام والد داخل reply نیز
+                    # فقط داخل reply قرار می‌دهیم
                     if 'reply' not in message_entry or not isinstance(message_entry['reply'], dict):
                         message_entry['reply'] = {}
                     message_entry['reply']['parent_message'] = {
@@ -888,12 +883,7 @@ class UserTracker:
                                 pid = (m.get('reply') or {}).get('reply_to_message_id') or m.get('reply_to')
                                 if pid in by_id:
                                     p = by_id[pid]
-                                    m['parent_message'] = {
-                                        'message_id': p.get('message_id'),
-                                        'username': p.get('username'),
-                                        'text': p.get('text', '')
-                                    }
-                                    # درج والد در reply نیز برای سازگاری با خروجی موردنظر
+                                    # فقط داخل reply قرار می‌دهیم
                                     if 'reply' not in m or not isinstance(m['reply'], dict):
                                         m['reply'] = {}
                                     m['reply']['parent_message'] = {
@@ -1113,12 +1103,7 @@ class UserTracker:
                                     pid = (m.get('reply') or {}).get('reply_to_message_id') or m.get('reply_to')
                                     if pid in by_id:
                                         p = by_id[pid]
-                                        m['parent_message'] = {
-                                            'message_id': p.get('message_id'),
-                                            'username': p.get('username'),
-                                            'text': p.get('text', '')
-                                        }
-                                        # درج والد در reply نیز
+                                        # فقط داخل reply قرار می‌دهیم
                                         if 'reply' not in m or not isinstance(m['reply'], dict):
                                             m['reply'] = {}
                                         m['reply']['parent_message'] = {
