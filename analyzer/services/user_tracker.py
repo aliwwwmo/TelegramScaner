@@ -580,19 +580,6 @@ class UserTracker:
             except Exception:
                 pass
 
-            # افزودن خلاصهٔ خود پیام داخل reply
-            try:
-                message_text_value = getattr(message, 'text', '') or getattr(message, 'caption', '') or ''
-                if isinstance(reply_info, dict):
-                    reply_info['this_message'] = {
-                        'message_id': message_id,
-                        'text': message_text_value,
-                        'media_type': media_type,
-                        'message_link': message_link
-                    }
-            except Exception:
-                pass
-
             # اطلاعات پیام
             message_entry = {
                 "group_id": chat_id,
